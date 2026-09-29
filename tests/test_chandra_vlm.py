@@ -498,6 +498,65 @@ def test_chandra_invalid_coordinates_preserve_text_without_provenance(bbox, capl
     assert "Invalid Chandra bbox" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "bbox",
+    [
+        "100 200 300 400",
+        "100,200,300,400",
+        "100, 200, 300, 400",
+        " 100 ,200,  300\t400 ",
+        "100.0,200.0,300.0,400.0",
+    ],
+)
+def test_chandra_bbox_accepts_whitespace_or_comma_separators(bbox, caplog):
+    doc = parse_chandra_html(
+        f'<div data-label="Text" data-bbox="{bbox}">Located</div>',
+        Size(width=500, height=1000),
+        1,
+    )
+    prov = doc.texts[0].prov
+    assert len(prov) == 1
+    assert (prov[0].bbox.l, prov[0].bbox.t, prov[0].bbox.r, prov[0].bbox.b) == (
+        50,
+        200,
+        150,
+        400,
+    )
+    assert "Chandra bbox" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "bbox",
+    [
+        "100,200,300",
+        "100,200,300,400,500",
+        "100,,200,300,400",
+        "100,200,300,400,",
+        "100;200;300;400",
+        "",
+    ],
+)
+def test_chandra_malformed_bbox_preserves_text_without_provenance(bbox, caplog):
+    doc = parse_chandra_html(
+        f'<div data-label="Text" data-bbox="{bbox}">Kept</div>',
+        Size(width=100, height=100),
+        1,
+    )
+    assert doc.texts[0].text == "Kept" and not doc.texts[0].prov
+    assert "Missing or invalid Chandra bbox" in caplog.text
+
+
+@pytest.mark.parametrize("bbox", ["0,0,1001,1000", "-1, 0, 100, 100", "100,0,0,100"])
+def test_chandra_comma_bbox_out_of_range_is_rejected(bbox, caplog):
+    doc = parse_chandra_html(
+        f'<div data-label="Text" data-bbox="{bbox}">Kept</div>',
+        Size(width=100, height=100),
+        1,
+    )
+    assert doc.texts[0].text == "Kept" and not doc.texts[0].prov
+    assert "Invalid Chandra bbox" in caplog.text
+
+
 def test_chandra_table_row_groups_and_optional_end_tags():
     doc = _parse_fragment(
         "<table><thead><tr><th>Heading<tr><th>Subheading</thead>"
