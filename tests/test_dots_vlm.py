@@ -4,9 +4,20 @@
 """Test dots.ocr / dots.mocr JSON parsing in VLM pipeline."""
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
+import pytest
 from docling_core.types.doc import DocItemLabel, DoclingDocument, Size
+from PIL import Image as PILImage
 
+from docling.datamodel.base_models import Page
+from docling.datamodel.pipeline_options import VlmConvertOptions, VlmPipelineOptions
+from docling.datamodel.pipeline_options_vlm_model import DotsBboxFrame, ResponseFormat
+from docling.datamodel.stage_model_specs import VlmModelSpec
+from docling.datamodel.vlm_engine_options import ApiVlmEngineOptions
+from docling.datamodel.vlm_prompts import DOTS_LAYOUT_PROMPT
+from docling.models.inference_engines.vlm.base import VlmEngineType
+from docling.pipeline.vlm_pipeline import VlmPipeline
 from docling.utils.dots_utils import parse_dots_json
 
 
@@ -176,3 +187,73 @@ def test_dots_all_files_parse():
         assert len(doc.texts) + len(doc.tables) + len(doc.pictures) > 0, (
             f"No elements parsed from {path.name}"
         )
+
+
+# A DP-Bench page (439.37 x 666.14 pt) rendered at 300 dpi is sent as a
+# 1831 x 2776 px image. Qwen2-VL smart_resize brings that to 1260 x 1932 px,
+# the frame dots.ocr answers in; a model without that resize, such as a hosted
+# OpenAI-compatible VLM, answers in the 1831 px frame it received.
+_DP_BENCH_PAGE_SIZE = Size(width=439.37, height=666.14)
+_DP_BENCH_SCALE = 300 / 72
+_DP_BENCH_IMAGE_SIZE = (1831, 2776)
+_DP_BENCH_HEADER = (
+    '[{"bbox": [1477, 90, 1620, 140], "category": "Page-header", "text": "YARROW"}]'
+)
+
+
+def _api_engine() -> ApiVlmEngineOptions:
+    return ApiVlmEngineOptions(
+        engine_type=VlmEngineType.API_OPENAI,
+        url="http://localhost:8000/v1/chat/completions",
+    )
+
+
+def _dots_header_bbox(vlm_options: VlmConvertOptions):
+    pipeline = VlmPipeline.__new__(VlmPipeline)
+    pipeline.pipeline_options = VlmPipelineOptions(vlm_options=vlm_options)
+    page = Page(page_no=1, size=_DP_BENCH_PAGE_SIZE)
+    page._image_cache[_DP_BENCH_SCALE] = PILImage.new("RGB", _DP_BENCH_IMAGE_SIZE)
+    conv_res = MagicMock()
+    conv_res.input.file.name = "dp_bench.pdf"
+
+    doc = pipeline._dots_page_document(conv_res, page, _DP_BENCH_HEADER, None)
+
+    assert len(doc.texts) == 1
+    return doc.texts[0].prov[0].bbox
+
+
+@pytest.mark.parametrize("preset_id", ["dots_ocr", "dots_mocr"])
+def test_dots_presets_rescale_bboxes_from_qwen2vl_frame(preset_id: str):
+    """dots.ocr keeps its smart_resize frame, also when served through an API."""
+    vlm_options = VlmConvertOptions.from_preset(
+        preset_id, engine_options=_api_engine(), scale=_DP_BENCH_SCALE
+    )
+    assert vlm_options.model_spec.dots_bbox_frame == DotsBboxFrame.QWEN2VL
+
+    bbox = _dots_header_bbox(vlm_options)
+
+    assert bbox.l == pytest.approx(1477 * 439.37 / 1260)
+    assert bbox.r == pytest.approx(1620 * 439.37 / 1260)
+    assert bbox.b == pytest.approx(140 * 666.14 / 1932)
+
+
+def test_dots_input_image_frame_rescales_bboxes_from_sent_image():
+    """A model answering in the pixels it received lands on the page."""
+    vlm_options = VlmConvertOptions(
+        model_spec=VlmModelSpec(
+            name="hosted-vlm",
+            default_repo_id="hosted-vlm",
+            prompt=DOTS_LAYOUT_PROMPT,
+            response_format=ResponseFormat.DOTS_JSON,
+            dots_bbox_frame=DotsBboxFrame.INPUT_IMAGE,
+        ),
+        engine_options=_api_engine(),
+        scale=_DP_BENCH_SCALE,
+    )
+
+    bbox = _dots_header_bbox(vlm_options)
+
+    assert bbox.l == pytest.approx(1477 * 439.37 / 1831)
+    assert bbox.r == pytest.approx(1620 * 439.37 / 1831)
+    assert bbox.b == pytest.approx(140 * 666.14 / 2776)
+    assert bbox.r < _DP_BENCH_PAGE_SIZE.width

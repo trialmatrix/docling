@@ -51,6 +51,7 @@ from docling.datamodel.pipeline_options import (
 from docling.datamodel.pipeline_options_vlm_model import (
     ApiVlmOptions,
     BaseVlmOptions,
+    DotsBboxFrame,
     InferenceFramework,
     InlineVlmOptions,
     ResponseFormat,
@@ -629,10 +630,19 @@ class VlmPipeline(PaginatedPipeline):
                 f"got {type(vlm_options).__name__}."
             )
 
+        # Legacy options carry no model spec; they keep the dots.ocr frame.
+        bbox_frame = DotsBboxFrame.QWEN2VL
+        if isinstance(vlm_options, VlmConvertOptions):
+            bbox_frame = vlm_options.model_spec.dots_bbox_frame
+
         assert page.size is not None
         inference_image = page.get_image(scale=vlm_scale, max_size=vlm_max_size)
         model_image_size = None
-        if inference_image is not None:
+        if inference_image is not None and bbox_frame == DotsBboxFrame.INPUT_IMAGE:
+            model_image_size = Size(
+                width=inference_image.width, height=inference_image.height
+            )
+        elif inference_image is not None:
             model_image_size = compute_qwen2vl_image_size(
                 width=inference_image.width,
                 height=inference_image.height,
