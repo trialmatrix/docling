@@ -13,6 +13,7 @@ Related: https://github.com/docling-project/docling/issues/2583
 from unittest.mock import MagicMock
 
 import pytest
+from docling_core.types.doc import DoclingDocument
 from docling_core.types.doc.base import Size
 
 from docling.datamodel.base_models import (
@@ -25,7 +26,11 @@ from docling.datamodel.base_models import (
 )
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.pipeline_options import VlmPipelineOptions
-from docling.datamodel.pipeline_options_vlm_model import ResponseFormat
+from docling.datamodel.pipeline_options_vlm_model import (
+    ApiVlmOptions,
+    ResponseFormat,
+)
+from docling.datamodel.vlm_prompts import DOTS_LAYOUT_PROMPT
 from docling.pipeline.vlm_pipeline import VlmPipeline
 
 pytestmark = pytest.mark.ml_vlm
@@ -247,3 +252,56 @@ def test_failed_page_is_not_parsed_as_empty_output(
     assert [error.error_message for error in conv_res.errors] == [
         "No <doclang> XML fragment found in VLM response."
     ]
+
+
+def _finalize_dots_page(
+    pipeline: VlmPipeline, monkeypatch, conv_res: ConversionResult, page: Page
+) -> None:
+    pipeline.pipeline_options = VlmPipelineOptions(
+        vlm_options=ApiVlmOptions(
+            prompt=DOTS_LAYOUT_PROMPT, response_format=ResponseFormat.DOTS_JSON
+        )
+    )
+    monkeypatch.setattr(pipeline, "_finalize_page_output", lambda document, page: None)
+    page.size = Size(width=612, height=792)
+    backend = page._backend
+    page._backend = None  # no page image: bboxes are taken as page coordinates
+    conv_res.input.file.name = "doc.pdf"
+    document = pipeline._finalize_page_document(conv_res, page)
+    page._backend = backend
+    return document
+
+
+def test_unparseable_dots_reply_is_reported(pipeline: VlmPipeline, monkeypatch) -> None:
+    """A DOTS_JSON reply that cannot be parsed must not pass as an empty page
+    that converted successfully: it records an error and PARTIAL_SUCCESS."""
+    page = _make_page(1, VlmStopReason.END_OF_SEQUENCE)
+    page.predictions.vlm_response = VlmPrediction(
+        text="I cannot help with that.", stop_reason=VlmStopReason.END_OF_SEQUENCE
+    )
+    conv_res = _make_conv_res([page])
+    _finalize_dots_page(pipeline, monkeypatch, conv_res, page)
+
+    assert pipeline._determine_status(conv_res) == ConversionStatus.PARTIAL_SUCCESS
+    assert len(conv_res.errors) == 1
+    assert conv_res.errors[0].category == FailureCategory.INFERENCE_FAILURE
+    assert conv_res.errors[0].page_no == 1
+    assert conv_res.errors[0].error_message.startswith("Invalid dots response:")
+
+
+def test_object_wrapped_dots_reply_is_success(
+    pipeline: VlmPipeline, monkeypatch
+) -> None:
+    """The object form the shipped prompt asks for parses without errors."""
+    page = _make_page(1, VlmStopReason.END_OF_SEQUENCE)
+    page.predictions.vlm_response = VlmPrediction(
+        text='{"layout": [{"bbox": [124, 74, 150, 88], '
+        '"category": "Page-header", "text": "314"}]}',
+        stop_reason=VlmStopReason.END_OF_SEQUENCE,
+    )
+    conv_res = _make_conv_res([page])
+    document = _finalize_dots_page(pipeline, monkeypatch, conv_res, page)
+
+    assert [item.text for item in document.texts] == ["314"]
+    assert conv_res.errors == []
+    assert pipeline._determine_status(conv_res) == ConversionStatus.SUCCESS
