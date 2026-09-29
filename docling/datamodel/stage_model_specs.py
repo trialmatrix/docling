@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Set
 from pydantic import BaseModel, Field
 
 from docling.datamodel.pipeline_options_vlm_model import (
+    DotsBboxFrame,
     ResponseFormat,
     TransformersModelType,
     TransformersPromptStyle,
@@ -157,6 +158,16 @@ class VlmModelSpec(BaseModel):
 
     response_format: ResponseFormat = Field(
         description="Expected response format from the model"
+    )
+
+    dots_bbox_frame: DotsBboxFrame = Field(
+        default=DotsBboxFrame.QWEN2VL,
+        description=(
+            "Pixel frame of the bounding boxes in a dots_json response: "
+            "`qwen2vl` (image size after Qwen2-VL smart_resize, as for "
+            "dots.ocr) or `input_image` (size of the page image sent to the "
+            "model). Only used when response_format is dots_json."
+        ),
     )
 
     supported_engines: Set[VlmEngineType] | None = Field(

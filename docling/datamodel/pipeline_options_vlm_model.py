@@ -116,6 +116,20 @@ class ResponseFormat(str, Enum):
     MINERU2 = "mineru2"
 
 
+class DotsBboxFrame(str, Enum):
+    """Pixel frame of the bounding boxes in a ``dots_json`` response.
+
+    ``qwen2vl`` is the image size after the Qwen2-VL processor's
+    ``smart_resize``, the frame dots.ocr and dots.mocr answer in whichever
+    engine serves them. ``input_image`` is the size of the page image Docling
+    sends, the frame of a model that does no such resize, for example a hosted
+    OpenAI-compatible VLM prompted with the dots layout prompt.
+    """
+
+    QWEN2VL = "qwen2vl"
+    INPUT_IMAGE = "input_image"
+
+
 class InferenceFramework(str, Enum):
     MLX = "mlx"
     TRANSFORMERS = "transformers"
