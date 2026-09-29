@@ -205,3 +205,82 @@ def test_threaded_pipeline_stage_shutdown_timeout():
         release.set()
         if stage._thread is not None:
             stage._thread.join(timeout=5.0)
+
+
+def test_threaded_pipeline_stage_model_lock_serializes_runs():
+    """Stages of concurrent runs that share a model lock never call the model
+    from two threads at once (PyTorch MPS crashes when they do)."""
+    active = 0
+    peak = 0
+    counter_lock = threading.Lock()
+
+    class TrackingModel:
+        def __call__(self, conv_res, pages):
+            nonlocal active, peak
+            with counter_lock:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.05)
+            with counter_lock:
+                active -= 1
+            return pages
+
+    model = TrackingModel()
+    model_lock = threading.Lock()
+    stages = [
+        ThreadedPipelineStage(
+            name="layout",
+            model=model,
+            batch_size=1,
+            batch_timeout=0.01,
+            queue_max_size=10,
+            model_lock=model_lock,
+        )
+        for _ in range(4)
+    ]
+    for stage in stages:
+        stage.start()
+    try:
+        for run_id, stage in enumerate(stages, start=1):
+            for page_no in (1, 2):
+                stage.input_queue.put(
+                    ThreadedItem(
+                        payload=Page(page_no=page_no),
+                        run_id=run_id,
+                        page_no=page_no,
+                        conv_res=None,
+                    )
+                )
+    finally:
+        for stage in stages:
+            stage.stop()
+
+    assert peak == 1
+
+
+@pytest.mark.parametrize(
+    ("resolved_device", "expect_locks"), [("mps", True), ("cpu", False)]
+)
+def test_threaded_pipeline_inference_locks_on_mps(
+    monkeypatch, resolved_device, expect_locks
+):
+    """On MPS, every run's inference stages share one lock per model, so
+    doc_batch_concurrency > 1 cannot run a model concurrently."""
+    import docling.pipeline.standard_pdf_pipeline as spp
+
+    monkeypatch.setattr(spp, "decide_device", lambda *_a, **_k: resolved_device)
+    pipeline = StandardPdfPipeline(
+        ThreadedPdfPipelineOptions(do_table_structure=False, do_ocr=False)
+    )
+
+    run_a = {st.name: st for st in pipeline._create_run_ctx().stages}
+    run_b = {st.name: st for st in pipeline._create_run_ctx().stages}
+    for name in ("ocr", "layout", "table"):
+        lock = run_a[name]._model_lock
+        if expect_locks:
+            assert lock is not None
+            assert run_b[name]._model_lock is lock
+        else:
+            assert lock is None
+    for name in ("preprocess", "layout_postprocess", "assemble"):
+        assert run_a[name]._model_lock is None
