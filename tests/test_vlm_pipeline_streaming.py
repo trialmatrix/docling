@@ -4,7 +4,7 @@
 from pathlib import PurePath
 from types import SimpleNamespace
 
-from docling_core.types.doc import Size, TextItem
+from docling_core.types.doc import ContentLayer, Size, TextItem
 from PIL import Image
 
 from docling.backend.pdf_backend import PdfDocumentBackend, PdfPageBackend
@@ -310,6 +310,76 @@ def test_vlm_text_response_keeps_absolute_page_number_after_concatenation() -> N
     assert sorted(document.pages) == [5]
     assert document.texts[0].text == "Page five"
     assert document.texts[0].prov[0].page_no == 5
+    assert tracker.live == 0
+
+
+def test_vlm_html_response_keeps_text_before_first_heading_in_body() -> None:
+    # A transcribed page often opens mid-paragraph, continuing the previous
+    # page, before its first heading. That text is body content, not web-page
+    # chrome, so the HTML backend must not infer it as furniture.
+    tracker = _Tracker()
+    pipeline = VlmPipeline.__new__(VlmPipeline)
+    pipeline.pipeline_options = SimpleNamespace(
+        generate_page_images=False,
+        generate_picture_images=False,
+        images_scale=1.0,
+        vlm_options=InlineVlmOptions(
+            prompt="",
+            repo_id="test",
+            response_format=ResponseFormat.HTML,
+            inference_framework=InferenceFramework.TRANSFORMERS,
+        ),
+    )
+    pipeline.force_backend_text = False
+    conv_res = SimpleNamespace(
+        input=SimpleNamespace(file=PurePath("test.pdf")), errors=[]
+    )
+    page_documents = []
+    for page_no in (2, 4, 5):
+        page = Page(
+            page_no=page_no,
+            size=Size(width=100, height=100),
+            predictions=PagePredictions(
+                vlm_response=VlmPrediction(
+                    text=(
+                        f"<html><head><title>Title {page_no}</title></head><body>"
+                        f"<p>Continued {page_no}</p><h2>Heading {page_no}</h2>"
+                        f"<p>Body {page_no}</p></body></html>"
+                    )
+                )
+            ),
+        )
+        page._backend = _PageBackend(page_no, tracker)
+        page._default_image_scale = 1.0
+        page_documents.append(
+            (page_no, pipeline._finalize_page_document(conv_res, page))
+        )
+        pipeline._release_page_resources(page)
+    document = pipeline._concatenate_page_documents(page_documents)
+
+    body = [
+        (item.text, item.prov[0].page_no)
+        for item, _level in document.iterate_items()
+        if isinstance(item, TextItem)
+    ]
+    assert body == [
+        (text, page_no)
+        for page_no in (2, 4, 5)
+        for text in (
+            f"Continued {page_no}",
+            f"Heading {page_no}",
+            f"Body {page_no}",
+        )
+    ]
+    furniture = [
+        (item.text, item.prov[0].page_no)
+        for item, _level in document.iterate_items(
+            included_content_layers={ContentLayer.FURNITURE}
+        )
+        if isinstance(item, TextItem)
+    ]
+    assert furniture == [(f"Title {page_no}", page_no) for page_no in (2, 4, 5)]
+    assert "Continued 4" in document.export_to_markdown()
     assert tracker.live == 0
 
 
