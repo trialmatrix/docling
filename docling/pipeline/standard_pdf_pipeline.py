@@ -24,6 +24,7 @@ import threading
 import time
 import warnings
 from collections import defaultdict, deque
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence, cast
@@ -40,6 +41,7 @@ from docling_core.types.doc import (
 
 from docling.backend.abstract_backend import AbstractDocumentBackend
 from docling.backend.pdf_backend import PdfDocumentBackend, iter_pdf_page_backends
+from docling.datamodel.accelerator_options import AcceleratorDevice
 from docling.datamodel.base_models import (
     AssembledUnit,
     ConversionStatus,
@@ -55,6 +57,7 @@ from docling.datamodel.pipeline_options import (
     ThreadedPdfPipelineOptions,
 )
 from docling.datamodel.settings import settings
+from docling.exceptions import AcceleratorDeviceNotAvailableError
 from docling.models.factories import (
     get_layout_factory,
     get_ocr_factory,
@@ -86,6 +89,7 @@ from docling.pipeline.base_pipeline import (
     ConvertPipeline,
     get_expected_page_nos,
 )
+from docling.utils.accelerator_utils import decide_device
 from docling.utils.profiling import ProfilingScope, TimeRecorder
 from docling.utils.utils import chunkify
 
@@ -241,9 +245,14 @@ class ThreadedPipelineStage:
         shutdown_timeout: float = 15.0,
         postprocess: Callable[[ThreadedItem], None] | None = None,
         timed_out_run_ids: set[int] | None = None,
+        model_lock: threading.Lock | None = None,
     ) -> None:
         self.name = name
         self.model = model
+        # Shared by every run's copy of this stage when the model must not be
+        # invoked from more than one thread at a time (see
+        # StandardPdfPipeline._inference_locks).
+        self._model_lock = model_lock
         self.batch_size = batch_size
         self.batch_timeout = batch_timeout
         self.shutdown_timeout = shutdown_timeout
@@ -358,7 +367,8 @@ class ThreadedPipelineStage:
                 if _log.isEnabledFor(logging.DEBUG):
                     _t_start = time.time()
                     _t_mono = time.monotonic()
-                processed_pages = list(self.model(good[0].conv_res, pages))  # type: ignore[arg-type]
+                with self._model_lock or nullcontext():
+                    processed_pages = list(self.model(good[0].conv_res, pages))  # type: ignore[arg-type]
                 if _log.isEnabledFor(logging.DEBUG):
                     _log.debug(
                         "PIPELINE_PROFILING Stage %s: run_id=%d pages=%s start=%.3f end=%.3f duration=%.3fs",
@@ -595,6 +605,19 @@ class StandardPdfPipeline(ConvertPipeline):
         # initialise heavy models once
         self._init_models()
 
+        # Every execute() call builds its own stage threads around these shared
+        # models, so with settings.perf.doc_batch_concurrency > 1 several threads
+        # can run the same model at once. PyTorch's MPS backend is not safe for
+        # that: concurrent forward passes corrupt its Metal kernel cache and the
+        # process dies with SIGSEGV/SIGABRT or livelocks. On MPS, serialize each
+        # inference stage across runs; stages still overlap with one another,
+        # exactly as they do for a single document.
+        self._inference_locks: dict[str, threading.Lock] = (
+            {name: threading.Lock() for name in ("ocr", "layout", "table")}
+            if self._uses_mps()
+            else {}
+        )
+
     # ────────────────────────────────────────────────────────────────────────
     # Heavy-model initialisation & helpers
     # ────────────────────────────────────────────────────────────────────────
@@ -686,6 +709,16 @@ class StandardPdfPipeline(ConvertPipeline):
         )
 
     # ---------------------------------------------------------------- helpers
+    def _uses_mps(self) -> bool:
+        device = self.pipeline_options.accelerator_options.device
+        device_str = device.value if isinstance(device, AcceleratorDevice) else device
+        try:
+            return decide_device(device_str) == AcceleratorDevice.MPS.value
+        except ImportError:  # torch not installed: no model can run on MPS
+            return False
+        except AcceleratorDeviceNotAvailableError:  # explicit non-MPS device
+            return False
+
     def _make_ocr_model(self, art_path: Path | None) -> Any:
         factory = get_ocr_factory(
             allow_external_plugins=self.pipeline_options.allow_external_plugins
@@ -734,6 +767,7 @@ class StandardPdfPipeline(ConvertPipeline):
         ocr = ThreadedPipelineStage(
             name="ocr",
             model=self.ocr_model,
+            model_lock=self._inference_locks.get("ocr"),
             batch_size=opts.ocr_batch_size,
             batch_timeout=opts.batch_polling_interval_seconds,
             queue_max_size=opts.queue_max_size,
@@ -743,6 +777,7 @@ class StandardPdfPipeline(ConvertPipeline):
         layout = ThreadedPipelineStage(
             name="layout",
             model=self.layout_model,
+            model_lock=self._inference_locks.get("layout"),
             batch_size=opts.layout_batch_size,
             batch_timeout=opts.batch_polling_interval_seconds,
             queue_max_size=opts.queue_max_size,
@@ -761,6 +796,7 @@ class StandardPdfPipeline(ConvertPipeline):
         table = ThreadedPipelineStage(
             name="table",
             model=self.table_model,
+            model_lock=self._inference_locks.get("table"),
             batch_size=opts.table_batch_size,
             batch_timeout=opts.batch_polling_interval_seconds,
             queue_max_size=opts.queue_max_size,

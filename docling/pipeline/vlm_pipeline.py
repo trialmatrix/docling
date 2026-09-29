@@ -34,6 +34,7 @@ from docling.backend.abstract_backend import (
 from docling.backend.html_backend import HTMLDocumentBackend
 from docling.backend.md_backend import MarkdownDocumentBackend
 from docling.backend.pdf_backend import PdfDocumentBackend, iter_pdf_page_backends
+from docling.datamodel.backend_options import BackendOptions, HTMLBackendOptions
 from docling.datamodel.base_models import (
     ConversionStatus,
     DoclingComponentType,
@@ -497,8 +498,15 @@ class VlmPipeline(PaginatedPipeline):
                 conv_res, page, InputFormat.MD, MarkdownDocumentBackend
             )
         elif response_format == ResponseFormat.HTML:
+            # A page transcription has no web-page chrome: text before the
+            # first heading is usually a paragraph continued from the previous
+            # page, so it must stay in the body.
             document = self._convert_text_page(
-                conv_res, page, InputFormat.HTML, HTMLDocumentBackend
+                conv_res,
+                page,
+                InputFormat.HTML,
+                HTMLDocumentBackend,
+                backend_options=HTMLBackendOptions(infer_furniture=False),
             )
         elif response_format == ResponseFormat.CHANDRA_HTML:
             from docling.utils.chandra_utils import parse_chandra_html
@@ -649,14 +657,26 @@ class VlmPipeline(PaginatedPipeline):
                 scale=1.0,
                 max_size=None,
             )
-        return parse_dots_json(
-            content=predicted_text,
-            original_page_size=page.size,
-            page_no=page.page_no,
-            filename=conv_res.input.file.name or "file",
-            page_image=page_image,
-            model_image_size=model_image_size,
-        )
+        try:
+            return parse_dots_json(
+                content=predicted_text,
+                original_page_size=page.size,
+                page_no=page.page_no,
+                filename=conv_res.input.file.name or "file",
+                page_image=page_image,
+                model_image_size=model_image_size,
+            )
+        except ValueError as exc:
+            conv_res.errors.append(
+                ErrorItem(
+                    component_type=DoclingComponentType.PIPELINE,
+                    module_name=self.__class__.__name__,
+                    error_message=f"Invalid dots response: {exc}",
+                    category=FailureCategory.INFERENCE_FAILURE,
+                    page_no=page.page_no,
+                )
+            )
+            return DoclingDocument(name=f"page_{page.page_no}")
 
     def _nemotron_parse_v2_page_document(
         self,
@@ -726,6 +746,7 @@ class VlmPipeline(PaginatedPipeline):
         page: Page,
         input_format: InputFormat,
         backend_class: type[DeclarativeDocumentBackend],
+        backend_options: BackendOptions | None = None,
     ) -> DoclingDocument:
         response = page.predictions.vlm_response
         predicted_text = self._extract_code_block(
@@ -737,8 +758,11 @@ class VlmPipeline(PaginatedPipeline):
             filename=conv_res.input.file.name,
             format=input_format,
             backend=backend_class,
+            backend_options=backend_options,
         )
-        backend = backend_class(in_doc=out_doc, path_or_stream=response_bytes)
+        backend = backend_class(
+            in_doc=out_doc, path_or_stream=response_bytes, options=backend_options
+        )
         try:
             document = backend.convert()
         finally:

@@ -8,7 +8,7 @@ import json
 import pytest
 from docling_core.types.doc import DocItemLabel, Size
 
-from docling.utils.dots_utils import _clean_json, parse_dots_json
+from docling.utils.dots_utils import _load_dots_elements, parse_dots_json
 
 
 @pytest.fixture
@@ -89,9 +89,93 @@ class TestParseMalformedJsonTruncated:
 
     def test_no_json_structure(self, page_size: Size):
         raw = "completely invalid output with no brackets"
+        with pytest.raises(ValueError, match="no JSON array or object"):
+            parse_dots_json(raw, page_size, page_no=1)
+
+    def test_unrecoverable_json_raises(self, page_size: Size):
+        # Truncated before any element completed: nothing can be recovered.
+        with pytest.raises(ValueError, match="malformed dots JSON"):
+            parse_dots_json('[{"bbox": [0, 0, 1', page_size, page_no=1)
+
+    def test_non_layout_json_raises(self, page_size: Size):
+        with pytest.raises(ValueError, match="neither an array"):
+            parse_dots_json('{"answer": "no layout here"}', page_size, page_no=1)
+
+
+class TestParseObjectWrappedLayout:
+    """The shipped DOTS_LAYOUT_PROMPT asks for "a single JSON object"; hosted
+    models then wrap the element array, e.g. ``{"layout": [...]}``."""
+
+    def test_layout_key_object(self, page_size: Size):
+        # Shape of a real hosted-model reply that previously parsed to nothing.
+        raw = (
+            "{\n"
+            '  "layout": [\n'
+            "    {\n"
+            '      "bbox": [124, 74, 150, 88],\n'
+            '      "category": "Page-header",\n'
+            '      "text": "314"\n'
+            "    },\n"
+            '    {"bbox": [60, 100, 440, 180], "category": "Text", "text": "Body"}\n'
+            "  ]\n"
+            "}"
+        )
         doc = parse_dots_json(raw, page_size, page_no=1)
-        items = list(doc.iterate_items())
-        assert len(items) == 0
+        items = [item for item, _ in doc.iterate_items()]
+        assert [item.label for item in items] == [
+            DocItemLabel.PAGE_HEADER,
+            DocItemLabel.TEXT,
+        ]
+        assert items[0].text == "314"
+        assert abs(items[0].prov[0].bbox.l - 124.0) < 0.01
+
+    def test_any_single_list_key(self, page_size: Size):
+        data = {
+            "page": 1,
+            "elements": [{"bbox": [1, 2, 3, 4], "category": "Title", "text": "T"}],
+        }
+        doc = parse_dots_json(json.dumps(data), page_size, page_no=1)
+        items = [item for item, _ in doc.iterate_items()]
+        assert len(items) == 1
+        assert items[0].label == DocItemLabel.TITLE
+
+    def test_fenced_object_with_preamble(self, page_size: Size):
+        data = {"layout": [{"bbox": [1, 2, 3, 4], "category": "Text", "text": "x"}]}
+        raw = f"Here is the layout:\n```json\n{json.dumps(data)}\n```\n"
+        doc = parse_dots_json(raw, page_size, page_no=1)
+        assert len(list(doc.iterate_items())) == 1
+
+    def test_truncated_object(self, page_size: Size):
+        raw = (
+            '{"layout": [{"bbox": [0, 0, 10, 10], "category": "Text", "text": "a}"},'
+            ' {"bbox": [0, 10, 10, 20], "category": "Text", "text": "b"},'
+            ' {"bbox": [0, 20, 10, 3'
+        )
+        doc = parse_dots_json(raw, page_size, page_no=1)
+        assert [item.text for item, _ in doc.iterate_items()] == ["a}", "b"]
+
+    def test_empty_layout_is_blank_page(self, page_size: Size):
+        doc = parse_dots_json('{"layout": []}', page_size, page_no=1)
+        assert len(list(doc.iterate_items())) == 0
+
+    def test_single_element_object(self, page_size: Size):
+        data = {"bbox": [1, 2, 3, 4], "category": "Text", "text": "only"}
+        doc = parse_dots_json(json.dumps(data), page_size, page_no=1)
+        assert [item.text for item, _ in doc.iterate_items()] == ["only"]
+
+    def test_empty_side_list_is_ignored(self, page_size: Size):
+        data = {
+            "warnings": [],
+            "layout": [{"bbox": [1, 2, 3, 4], "category": "Text", "text": "x"}],
+        }
+        doc = parse_dots_json(json.dumps(data), page_size, page_no=1)
+        assert [item.text for item, _ in doc.iterate_items()] == ["x"]
+
+    def test_ambiguous_object_raises(self, page_size: Size):
+        element = {"bbox": [1, 2, 3, 4], "category": "Text", "text": "x"}
+        data = {"layout": [element], "other": [element]}
+        with pytest.raises(ValueError, match="exactly one such array"):
+            parse_dots_json(json.dumps(data), page_size, page_no=1)
 
 
 class TestParseEmptyJson:
@@ -149,19 +233,33 @@ class TestParseMultipleCategories:
         assert DocItemLabel.PICTURE in labels
 
 
-class TestCleanJson:
+class TestLoadDotsElements:
     def test_strips_leading_text(self):
-        assert _clean_json('garbage [{"a":1}]') == '[{"a":1}]'
+        assert _load_dots_elements('garbage [{"a":1}]') == [{"a": 1}]
+
+    def test_ignores_trailing_text(self):
+        assert _load_dots_elements('[{"a":1}]\n```') == [{"a": 1}]
 
     def test_closes_truncated_array(self):
-        result = _clean_json('[{"a":1}, {"b":2')
-        assert result == '[{"a":1}]'
+        assert _load_dots_elements('[{"a":1}, {"b":2') == [{"a": 1}]
+
+    def test_truncation_ignores_braces_in_strings(self):
+        raw = '[{"t":"x}"}, {"t":"\\"}{'
+        assert _load_dots_elements(raw) == [{"t": "x}"}]
+
+    def test_closes_truncated_object(self):
+        raw = '{"layout": [{"a":1}, {"b":[2, 3]}, {"c":'
+        assert _load_dots_elements(raw) == [{"a": 1}, {"b": [2, 3]}]
 
     def test_no_bracket(self):
-        assert _clean_json("no json here") == "[]"
+        with pytest.raises(ValueError):
+            _load_dots_elements("no json here")
 
     def test_already_valid(self):
-        assert _clean_json('[{"a":1}]') == '[{"a":1}]'
+        assert _load_dots_elements('[{"a":1}]') == [{"a": 1}]
+
+    def test_object_unwrapped(self):
+        assert _load_dots_elements('{"layout": [{"a":1}]}') == [{"a": 1}]
 
 
 class TestParseFormulaAndFootnote:

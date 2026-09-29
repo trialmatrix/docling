@@ -3,22 +3,27 @@
 
 """Test dots.ocr / dots.mocr JSON parsing in VLM pipeline."""
 
+import json
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from docling_core.types.doc import DocItemLabel, DoclingDocument, Size
 from PIL import Image as PILImage
+from pydantic import AnyUrl
 
-from docling.datamodel.base_models import Page
+from docling.datamodel.base_models import ConversionStatus, InputFormat, Page
 from docling.datamodel.pipeline_options import VlmConvertOptions, VlmPipelineOptions
 from docling.datamodel.pipeline_options_vlm_model import DotsBboxFrame, ResponseFormat
 from docling.datamodel.stage_model_specs import VlmModelSpec
-from docling.datamodel.vlm_engine_options import ApiVlmEngineOptions
+from docling.datamodel.vlm_engine_options import ApiVlmEngineOptions, VlmEngineType
 from docling.datamodel.vlm_prompts import DOTS_LAYOUT_PROMPT
-from docling.models.inference_engines.vlm.base import VlmEngineType
+from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.pipeline.vlm_pipeline import VlmPipeline
 from docling.utils.dots_utils import parse_dots_json
+from tests.fakes.http_service import FakeService
+from tests.fakes.openai_compatible import FakeOpenAiApi
 
 
 def get_dots_test_paths():
@@ -119,15 +124,14 @@ def test_dots_empty_content():
 
 
 def test_dots_malformed_json():
-    """Test graceful handling of invalid JSON."""
-    doc = parse_dots_json(
-        content="this is not json at all",
-        original_page_size=Size(width=612, height=792),
-        page_no=1,
-        filename="bad.json",
-    )
-    assert isinstance(doc, DoclingDocument)
-    assert len(doc.texts) == 0
+    """Invalid JSON is reported instead of silently yielding an empty page."""
+    with pytest.raises(ValueError):
+        parse_dots_json(
+            content="this is not json at all",
+            original_page_size=Size(width=612, height=792),
+            page_no=1,
+            filename="bad.json",
+        )
 
 
 def test_dots_truncated_json():
@@ -187,6 +191,72 @@ def test_dots_all_files_parse():
         assert len(doc.texts) + len(doc.tables) + len(doc.pictures) > 0, (
             f"No elements parsed from {path.name}"
         )
+
+
+@pytest.fixture
+def api() -> Iterator[FakeOpenAiApi]:
+    service = FakeService()
+    fake = FakeOpenAiApi()
+    service.include(fake.router)
+    service.start()
+    fake.service = service
+    try:
+        yield fake
+    finally:
+        service.stop()
+
+
+def _convert_first_page(api: FakeOpenAiApi, completion: str):
+    api.completion = completion
+    options = VlmPipelineOptions(
+        enable_remote_services=True,
+        # The dots_ocr preset ships DOTS_LAYOUT_PROMPT and ResponseFormat.DOTS_JSON.
+        vlm_options=VlmConvertOptions.from_preset(
+            "dots_ocr",
+            engine_options=ApiVlmEngineOptions(
+                engine_type=VlmEngineType.API,
+                url=AnyUrl(f"{api.service.base_url}/v1/chat/completions"),
+            ),
+        ),
+    )
+    converter = DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_cls=VlmPipeline, pipeline_options=options
+            )
+        }
+    )
+    return converter.convert(
+        Path("./tests/data/pdf/sources/2206.01062.pdf"),
+        page_range=(1, 1),
+        raises_on_error=False,
+    )
+
+
+def test_hosted_model_object_reply_is_converted(api: FakeOpenAiApi):
+    """A hosted model following DOTS_LAYOUT_PROMPT's "single JSON object"
+    instruction must not produce an empty page reported as SUCCESS."""
+    reply = json.dumps(
+        {
+            "layout": [
+                {"bbox": [124, 74, 150, 88], "category": "Page-header", "text": "314"},
+                {"bbox": [60, 100, 440, 180], "category": "Text", "text": "Body"},
+            ]
+        },
+        indent=2,
+    )
+    result = _convert_first_page(api, reply)
+    assert result.status == ConversionStatus.SUCCESS
+    assert [item.text for item in result.document.texts] == ["314", "Body"]
+
+
+def test_unparseable_reply_is_reported(api: FakeOpenAiApi):
+    """An unparseable DOTS reply is reported, not converted into an empty page
+    with SUCCESS status."""
+    result = _convert_first_page(api, "Sorry, I cannot read this page.")
+    assert result.status == ConversionStatus.PARTIAL_SUCCESS
+    assert [error.page_no for error in result.errors] == [1]
+    assert result.errors[0].error_message.startswith("Invalid dots response:")
 
 
 # A DP-Bench page (439.37 x 666.14 pt) rendered at 300 dpi is sent as a

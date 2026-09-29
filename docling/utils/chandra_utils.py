@@ -45,6 +45,11 @@ _log = logging.getLogger(__name__)
 
 _MAX_TABLE_GRID_CELLS = 1000
 
+# The layout prompt asks for "x0 y0 x1 y1", but hosted models following it often
+# write "x0,y0,x1,y1" or "x0, y0, x1, y1"; accept a single comma or whitespace
+# between coordinates.
+_BBOX_SEPARATOR = re.compile(r"\s*,\s*|\s+")
+
 _LABEL_MAP = {
     "Title": DocItemLabel.TITLE,
     "Section-Header": DocItemLabel.SECTION_HEADER,
@@ -357,7 +362,7 @@ class _ChandraDocumentBuilder:
     def _provenance(self, node: _Element) -> ProvenanceItem | None:
         raw = node.attrs.get("data-bbox", "")
         try:
-            x0, y0, x1, y1 = (float(c) for c in raw.split())
+            x0, y0, x1, y1 = (float(c) for c in _BBOX_SEPARATOR.split(raw.strip()))
         except ValueError:
             _log.warning(
                 "Missing or invalid Chandra bbox %r; preserving content without coordinates",
