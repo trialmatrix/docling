@@ -15,16 +15,25 @@ original page coordinate space.
 11 categories: Caption, Footnote, Formula, List-item, Page-footer,
 Page-header, Picture, Section-header, Table, Text, Title.
 
+Hosted general-purpose VLMs given the same layout prompt, which asks for
+"a single JSON object", usually wrap that array in an object instead::
+
+    {"layout": [{"bbox": [x1, y1, x2, y2], "category": "Label", ...}, ...]}
+
+Both forms are accepted.
+
 Tables arrive as HTML ``<table>``; formulas as LaTeX; Pictures have no
 ``text`` field.  The model sometimes truncates output, so the parser
-is tolerant of malformed JSON.
+recovers everything up to the last complete element.  A response that
+contains no decodable element list raises ``ValueError`` so callers can
+report it instead of silently producing an empty page.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
+from typing import Any
 
 from docling_core.types.doc import (
     BoundingBox,
@@ -58,26 +67,116 @@ _LABEL_MAP: dict[str, DocItemLabel] = {
 }
 
 
-def _clean_json(raw: str) -> str:
-    """Best-effort cleanup of potentially truncated JSON arrays.
+def _close_truncated(raw: str) -> str | None:
+    """Cut a truncated JSON document after its last complete element and close it.
 
-    1. Strip leading text before the first ``[``.
-    2. If the array does not end with ``]``, find the last ``}`` and append ``]``.
-    3. Return ``"[]"`` if no valid JSON structure found.
+    Scans *raw* (which must start with ``[`` or ``{``) while tracking string
+    literals, and remembers the last position where an object closed directly
+    inside an array, i.e. the end of the last complete layout element.  The
+    text is cut there and the still-open brackets are closed in order.
+
+    Returns ``None`` if no complete element inside an array was found.
     """
-    idx = raw.find("[")
-    if idx == -1:
-        return "[]"
-    raw = raw[idx:]
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    cut: tuple[int, list[str]] | None = None
+    for pos, char in enumerate(raw):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "[{":
+            stack.append(char)
+        elif char in "]}":
+            if not stack:
+                break
+            stack.pop()
+            if not stack:
+                # The top-level value is complete; nothing is truncated.
+                return None
+            if char == "}" and stack[-1] == "[":
+                cut = (pos, list(stack))
+    if cut is None:
+        return None
+    pos, open_brackets = cut
+    closers = "".join("]" if b == "[" else "}" for b in reversed(open_brackets))
+    return raw[: pos + 1] + closers
 
-    stripped = raw.rstrip()
-    if not stripped.endswith("]"):
-        last_brace = stripped.rfind("}")
-        if last_brace == -1:
-            return "[]"
-        raw = stripped[: last_brace + 1] + "]"
 
-    return raw
+def _extract_elements(value: Any) -> list[Any] | None:
+    """Return the list of layout elements held by a decoded dots response.
+
+    Accepts the native dots.ocr form, a bare array of element objects, and a
+    single JSON object wrapping that array under one key (for example
+    ``{"layout": [...]}``), which is what hosted models produce for the
+    shipped prompt's "single JSON object" instruction.  An object is accepted
+    only if exactly one of its values is a non-empty list of objects (or its
+    only list value is empty, for a blank page), so the choice is never
+    ambiguous.  A lone element object (with a ``bbox``) is treated as a
+    one-element list.
+    """
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, dict):
+        return None
+    candidates = [
+        item
+        for item in value.values()
+        if isinstance(item, list) and all(isinstance(elem, dict) for elem in item)
+    ]
+    if len(candidates) > 1:
+        # An empty side list (e.g. ``"warnings": []``) does not compete with
+        # the element list.
+        candidates = [item for item in candidates if item]
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates and "bbox" in value:
+        return [value]
+    return None
+
+
+def _load_dots_elements(raw: str) -> list[Any]:
+    """Decode the layout elements from a raw dots response.
+
+    Leading prose and trailing text (such as a closing Markdown code fence)
+    around the JSON value are ignored, and output truncated mid-element is
+    recovered up to the last complete element.
+
+    Raises:
+        ValueError: if no JSON array or object is found, the JSON cannot be
+            decoded or recovered, or it does not contain a layout element list.
+    """
+    starts = [idx for idx in (raw.find("["), raw.find("{")) if idx != -1]
+    if not starts:
+        raise ValueError("no JSON array or object found in dots response")
+    text = raw[min(starts) :]
+
+    decoder = json.JSONDecoder()
+    try:
+        value, _ = decoder.raw_decode(text)
+    except json.JSONDecodeError as exc:
+        repaired = _close_truncated(text)
+        if repaired is None:
+            raise ValueError(f"malformed dots JSON: {exc}") from exc
+        try:
+            value = json.loads(repaired)
+        except json.JSONDecodeError as repair_exc:
+            raise ValueError(f"malformed dots JSON: {exc}") from repair_exc
+        _log.warning("Recovered truncated dots JSON up to the last complete element")
+
+    elements = _extract_elements(value)
+    if elements is None:
+        raise ValueError(
+            "dots JSON is neither an array of layout elements nor an object "
+            f"holding exactly one such array (got {type(value).__name__})"
+        )
+    return elements
 
 
 def parse_dots_json(
@@ -91,7 +190,8 @@ def parse_dots_json(
     """Parse dots.ocr / dots.mocr JSON output into a DoclingDocument.
 
     Args:
-        content: Raw JSON string (array of element dicts).
+        content: Raw model output: a JSON array of element dicts, or a JSON
+            object wrapping that array under a single key.
         original_page_size: Physical page dimensions (points).
         page_no: Page number (1-based).
         filename: Source filename.
@@ -100,7 +200,12 @@ def parse_dots_json(
             this resolution to *original_page_size*.
 
     Returns:
-        DoclingDocument populated with parsed elements.
+        DoclingDocument populated with parsed elements.  Empty or
+        whitespace-only content yields a document with an empty page.
+
+    Raises:
+        ValueError: if non-empty content holds no decodable layout element
+            list (see :func:`_load_dots_elements`).
     """
     origin = DocumentOrigin(
         filename=filename,
@@ -136,16 +241,7 @@ def parse_dots_json(
     if not content or not content.strip():
         return doc
 
-    cleaned = _clean_json(content)
-    try:
-        elements = json.loads(cleaned)
-    except json.JSONDecodeError as exc:
-        _log.warning("Failed to parse dots JSON after cleanup: %s", exc)
-        return doc
-
-    if not isinstance(elements, list):
-        _log.warning("Expected JSON array, got %s", type(elements).__name__)
-        return doc
+    elements = _load_dots_elements(content)
 
     current_list_group = None
 

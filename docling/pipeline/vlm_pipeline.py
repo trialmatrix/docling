@@ -639,14 +639,26 @@ class VlmPipeline(PaginatedPipeline):
                 scale=1.0,
                 max_size=None,
             )
-        return parse_dots_json(
-            content=predicted_text,
-            original_page_size=page.size,
-            page_no=page.page_no,
-            filename=conv_res.input.file.name or "file",
-            page_image=page_image,
-            model_image_size=model_image_size,
-        )
+        try:
+            return parse_dots_json(
+                content=predicted_text,
+                original_page_size=page.size,
+                page_no=page.page_no,
+                filename=conv_res.input.file.name or "file",
+                page_image=page_image,
+                model_image_size=model_image_size,
+            )
+        except ValueError as exc:
+            conv_res.errors.append(
+                ErrorItem(
+                    component_type=DoclingComponentType.PIPELINE,
+                    module_name=self.__class__.__name__,
+                    error_message=f"Invalid dots response: {exc}",
+                    category=FailureCategory.INFERENCE_FAILURE,
+                    page_no=page.page_no,
+                )
+            )
+            return DoclingDocument(name=f"page_{page.page_no}")
 
     def _nemotron_parse_v2_page_document(
         self,
