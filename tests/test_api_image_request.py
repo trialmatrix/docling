@@ -122,6 +122,91 @@ class TestApiImageRequest:
         assert response.stop_reason == VlmStopReason.END_OF_SEQUENCE
 
     @patch("docling.utils.api_image_request._make_retry_session")
+    def test_error_finish_reason_returns_inference_error(
+        self, mock_session_factory, sample_image
+    ):
+        """A provider that fails mid-generation behind an HTTP 200 (OpenRouter's
+        ``finish_reason: "error"`` with a top-level ``error``) is a failed page: its
+        partial text is dropped and ``error`` keeps the provider's status code."""
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.status_code = 200
+        mock_resp.text = json.dumps(
+            {
+                "id": "gen-1",
+                "created": 1234567890,
+                "error": {"code": 502, "message": "Upstream disconnected"},
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": '{"layout": [{"'},
+                        "finish_reason": "error",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 50,
+                    "completion_tokens": 16000,
+                    "total_tokens": 16050,
+                },
+            }
+        )
+        mock_session_factory.return_value.__enter__.return_value.post.return_value = (
+            mock_resp
+        )
+
+        response = api_image_request(
+            image=sample_image,
+            prompt="Test prompt",
+            url="http://test.api/v1/chat/completions",
+        )
+
+        assert response.text == ""
+        assert response.stop_reason == VlmStopReason.INFERENCE_ERROR
+        assert response.error == "HTTP 502: Upstream disconnected"
+
+    @patch("docling.utils.api_image_request._make_retry_session")
+    def test_error_body_without_choices_returns_inference_error(
+        self, mock_session_factory, sample_image
+    ):
+        """An error body with no completion keeps the provider's code rather than
+        failing as an unparsable response."""
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.status_code = 200
+        mock_resp.text = json.dumps({"error": {"code": 429, "message": "Rate limited"}})
+        mock_session_factory.return_value.__enter__.return_value.post.return_value = (
+            mock_resp
+        )
+
+        response = api_image_request(
+            image=sample_image,
+            prompt="Test prompt",
+            url="http://test.api/v1/chat/completions",
+        )
+
+        assert response.stop_reason == VlmStopReason.INFERENCE_ERROR
+        assert response.error == "HTTP 429: Rate limited"
+
+    @patch("docling.utils.api_image_request._make_retry_session")
+    def test_error_finish_reason_without_error_object(
+        self, mock_session_factory, sample_image, mock_response_factory
+    ):
+        """``finish_reason: "error"`` alone still fails the page."""
+        mock_session_factory.return_value.__enter__.return_value.post.return_value = (
+            mock_response_factory(content="Partial", finish_reason="error")
+        )
+
+        response = api_image_request(
+            image=sample_image,
+            prompt="Test prompt",
+            url="http://test.api/v1/chat/completions",
+        )
+
+        assert response.text == ""
+        assert response.stop_reason == VlmStopReason.INFERENCE_ERROR
+        assert response.error == "HTTP unknown: provider error during generation"
+
+    @patch("docling.utils.api_image_request._make_retry_session")
     def test_tool_calls_response(
         self, mock_session_factory, sample_image, mock_response_factory
     ):
