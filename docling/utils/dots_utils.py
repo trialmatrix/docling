@@ -23,10 +23,13 @@ Hosted general-purpose VLMs given the same layout prompt, which asks for
 Both forms are accepted.
 
 Tables arrive as HTML ``<table>``; formulas as LaTeX; Pictures have no
-``text`` field.  The model sometimes truncates output, so the parser
-recovers everything up to the last complete element.  A response that
-contains no decodable element list raises ``ValueError`` so callers can
-report it instead of silently producing an empty page.
+``text`` field.  The model sometimes truncates output; a caller that has
+already reported the reply incomplete (it hit the token limit or the
+provider's content filter) may have the parser recover everything up to the
+last complete element.  Otherwise a truncated reply is not recovered,
+because the elements after the cut would be lost without any sign.  A
+response that contains no decodable element list raises ``ValueError`` so
+callers can report it instead of silently producing an empty page.
 """
 
 from __future__ import annotations
@@ -141,16 +144,18 @@ def _extract_elements(value: Any) -> list[Any] | None:
     return None
 
 
-def _load_dots_elements(raw: str) -> list[Any]:
+def _load_dots_elements(raw: str, *, recover_truncated: bool = True) -> list[Any]:
     """Decode the layout elements from a raw dots response.
 
     Leading prose and trailing text (such as a closing Markdown code fence)
-    around the JSON value are ignored, and output truncated mid-element is
-    recovered up to the last complete element.
+    around the JSON value are ignored.  With *recover_truncated*, output
+    truncated mid-element is recovered up to the last complete element;
+    without it, truncated output is an error.
 
     Raises:
         ValueError: if no JSON array or object is found, the JSON cannot be
-            decoded or recovered, or it does not contain a layout element list.
+            decoded (or, with *recover_truncated*, recovered), or it does not
+            contain a layout element list.
     """
     starts = [idx for idx in (raw.find("["), raw.find("{")) if idx != -1]
     if not starts:
@@ -164,6 +169,11 @@ def _load_dots_elements(raw: str) -> list[Any]:
         repaired = _close_truncated(text)
         if repaired is None:
             raise ValueError(f"malformed dots JSON: {exc}") from exc
+        if not recover_truncated:
+            raise ValueError(
+                "truncated dots JSON: the reply ends inside its element list "
+                f"although it was not reported incomplete ({exc})"
+            ) from exc
         try:
             value = json.loads(repaired)
         except json.JSONDecodeError as repair_exc:
@@ -186,6 +196,8 @@ def parse_dots_json(
     filename: str = "file",
     page_image: PILImage.Image | None = None,
     model_image_size: Size | None = None,
+    *,
+    recover_truncated: bool = True,
 ) -> DoclingDocument:
     """Parse dots.ocr / dots.mocr JSON output into a DoclingDocument.
 
@@ -198,6 +210,9 @@ def parse_dots_json(
         page_image: Optional PIL image of the page.
         model_image_size: If provided, bbox pixel coords are rescaled from
             this resolution to *original_page_size*.
+        recover_truncated: Keep the complete elements of a reply truncated
+            mid-element.  Pass ``False`` when the reply was reported complete,
+            so a cut that would silently drop elements is an error instead.
 
     Returns:
         DoclingDocument populated with parsed elements.  Empty or
@@ -241,7 +256,7 @@ def parse_dots_json(
     if not content or not content.strip():
         return doc
 
-    elements = _load_dots_elements(content)
+    elements = _load_dots_elements(content, recover_truncated=recover_truncated)
 
     current_list_group = None
 

@@ -122,6 +122,211 @@ class TestApiImageRequest:
         assert response.stop_reason == VlmStopReason.END_OF_SEQUENCE
 
     @patch("docling.utils.api_image_request._make_retry_session")
+    def test_error_finish_reason_returns_inference_error(
+        self, mock_session_factory, sample_image
+    ):
+        """A provider that fails mid-generation behind an HTTP 200 (OpenRouter's
+        ``finish_reason: "error"`` with a top-level ``error``) is a failed page: its
+        partial text is dropped and ``error`` keeps the provider's status code."""
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.status_code = 200
+        mock_resp.text = json.dumps(
+            {
+                "id": "gen-1",
+                "created": 1234567890,
+                "error": {"code": 502, "message": "Upstream disconnected"},
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": '{"layout": [{"'},
+                        "finish_reason": "error",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 50,
+                    "completion_tokens": 16000,
+                    "total_tokens": 16050,
+                },
+            }
+        )
+        mock_session_factory.return_value.__enter__.return_value.post.return_value = (
+            mock_resp
+        )
+
+        response = api_image_request(
+            image=sample_image,
+            prompt="Test prompt",
+            url="http://test.api/v1/chat/completions",
+        )
+
+        assert response.text == ""
+        assert response.stop_reason == VlmStopReason.INFERENCE_ERROR
+        assert response.error == "HTTP 502: Upstream disconnected"
+
+    @patch("docling.utils.api_image_request._make_retry_session")
+    def test_error_body_without_choices_returns_inference_error(
+        self, mock_session_factory, sample_image
+    ):
+        """An error body with no completion keeps the provider's code rather than
+        failing as an unparsable response."""
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.status_code = 200
+        mock_resp.text = json.dumps({"error": {"code": 429, "message": "Rate limited"}})
+        mock_session_factory.return_value.__enter__.return_value.post.return_value = (
+            mock_resp
+        )
+
+        response = api_image_request(
+            image=sample_image,
+            prompt="Test prompt",
+            url="http://test.api/v1/chat/completions",
+        )
+
+        assert response.stop_reason == VlmStopReason.INFERENCE_ERROR
+        assert response.error == "HTTP 429: Rate limited"
+
+    @patch("docling.utils.api_image_request._make_retry_session")
+    def test_error_finish_reason_without_error_object(
+        self, mock_session_factory, sample_image, mock_response_factory
+    ):
+        """``finish_reason: "error"`` alone still fails the page."""
+        mock_session_factory.return_value.__enter__.return_value.post.return_value = (
+            mock_response_factory(content="Partial", finish_reason="error")
+        )
+
+        response = api_image_request(
+            image=sample_image,
+            prompt="Test prompt",
+            url="http://test.api/v1/chat/completions",
+        )
+
+        assert response.text == ""
+        assert response.stop_reason == VlmStopReason.INFERENCE_ERROR
+        assert response.error == "HTTP unknown: provider error during generation"
+
+    @staticmethod
+    def _reply(message, finish_reason="stop"):
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.status_code = 200
+        mock_resp.text = json.dumps(
+            {
+                "id": "gen-1",
+                "created": 1234567890,
+                "choices": [
+                    {"index": 0, "message": message, "finish_reason": finish_reason}
+                ],
+                "usage": {
+                    "prompt_tokens": 50,
+                    "completion_tokens": 10,
+                    "total_tokens": 60,
+                },
+            }
+        )
+        return mock_resp
+
+    @patch("docling.utils.api_image_request._make_retry_session")
+    def test_refusal_returns_inference_error(
+        self, mock_session_factory, sample_image, caplog
+    ):
+        """A model that declines with an OpenAI-style ``refusal`` and no content
+        under an ordinary stop has read nothing: the page fails rather than
+        converting as blank, and the refusal text stays out of the error and
+        the log, since it can quote the page."""
+        mock_session_factory.return_value.__enter__.return_value.post.return_value = (
+            self._reply(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "refusal": "I'm sorry, I can't help with that.",
+                }
+            )
+        )
+
+        response = api_image_request(
+            image=sample_image,
+            prompt="Test prompt",
+            url="http://test.api/v1/chat/completions",
+        )
+
+        assert response.text == ""
+        assert response.stop_reason == VlmStopReason.INFERENCE_ERROR
+        assert response.error == (
+            "HTTP 200: the model refused the request (finish_reason=stop)"
+        )
+        assert "can't help" not in caplog.text
+        assert "refusal of 34 characters" in caplog.text
+
+    @patch("docling.utils.api_image_request._make_retry_session")
+    def test_filtered_refusal_keeps_content_filtered(
+        self, mock_session_factory, sample_image
+    ):
+        """A reply the provider stopped with its content filter stays
+        CONTENT_FILTERED even when it carries a refusal or no text, so callers
+        can tell a filtered page from a failed request."""
+        for message in (
+            {"role": "assistant", "content": None, "refusal": "Declined."},
+            {"role": "assistant", "content": ""},
+        ):
+            mock_session_factory.return_value.__enter__.return_value.post.return_value = self._reply(
+                message, finish_reason="content_filter"
+            )
+
+            response = api_image_request(
+                image=sample_image,
+                prompt="Test prompt",
+                url="http://test.api/v1/chat/completions",
+            )
+
+            assert response.stop_reason == VlmStopReason.CONTENT_FILTERED
+            assert response.error is None
+
+    @pytest.mark.parametrize("content", [None, "", "  \n"])
+    @patch("docling.utils.api_image_request._make_retry_session")
+    def test_empty_reply_returns_inference_error(
+        self, mock_session_factory, sample_image, content
+    ):
+        """A reply that ends normally with no text is a failed page, not a blank one."""
+        mock_session_factory.return_value.__enter__.return_value.post.return_value = (
+            self._reply({"role": "assistant", "content": content})
+        )
+
+        response = api_image_request(
+            image=sample_image,
+            prompt="Test prompt",
+            url="http://test.api/v1/chat/completions",
+        )
+
+        assert response.text == ""
+        assert response.stop_reason == VlmStopReason.INFERENCE_ERROR
+        assert response.error == (
+            "HTTP 200: the reply carried no text (finish_reason=stop)"
+        )
+
+    @patch("docling.utils.api_image_request._make_retry_session")
+    def test_blank_page_structure_is_a_normal_reply(
+        self, mock_session_factory, sample_image
+    ):
+        """A blank page answered with an empty element list is a complete reply."""
+        mock_session_factory.return_value.__enter__.return_value.post.return_value = (
+            self._reply(
+                {"role": "assistant", "content": '{"layout": []}', "refusal": None}
+            )
+        )
+
+        response = api_image_request(
+            image=sample_image,
+            prompt="Test prompt",
+            url="http://test.api/v1/chat/completions",
+        )
+
+        assert response.text == '{"layout": []}'
+        assert response.stop_reason == VlmStopReason.END_OF_SEQUENCE
+        assert response.error is None
+
+    @patch("docling.utils.api_image_request._make_retry_session")
     def test_tool_calls_response(
         self, mock_session_factory, sample_image, mock_response_factory
     ):

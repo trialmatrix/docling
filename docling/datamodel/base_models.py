@@ -566,6 +566,8 @@ class OpenAiChatMessage(BaseModel):
     # content empty and place the actual answer in reasoning_content.
     reasoning_content: str | None = None
     tool_calls: list[dict[str, Any]] | None = None
+    # OpenAI-style refusal: the model declined to answer, usually with no content.
+    refusal: str | None = None
 
 
 class OpenAiTopLogprob(BaseModel):
