@@ -305,3 +305,65 @@ def test_object_wrapped_dots_reply_is_success(
     assert [item.text for item in document.texts] == ["314"]
     assert conv_res.errors == []
     assert pipeline._determine_status(conv_res) == ConversionStatus.SUCCESS
+
+
+_TRUNCATED_DOTS = (
+    '{"layout": [{"bbox": [124, 74, 150, 88], "category": "Page-header", '
+    '"text": "314"}, {"bbox": [72, 100, 540, 140], "category": "Text", "text": "The'
+)
+
+
+def test_truncated_dots_reply_that_ended_normally_fails(
+    pipeline: VlmPipeline, monkeypatch
+) -> None:
+    """A reply reported complete whose JSON stops inside its element list is not
+    recovered as a short page: the elements before the cut are dropped and the
+    page reports an invalid reply."""
+    page = _make_page(1, VlmStopReason.END_OF_SEQUENCE)
+    page.predictions.vlm_response = VlmPrediction(
+        text=_TRUNCATED_DOTS, stop_reason=VlmStopReason.END_OF_SEQUENCE
+    )
+    conv_res = _make_conv_res([page])
+    document = _finalize_dots_page(pipeline, monkeypatch, conv_res, page)
+
+    assert list(document.iterate_items()) == []
+    assert pipeline._determine_status(conv_res) == ConversionStatus.PARTIAL_SUCCESS
+    assert len(conv_res.errors) == 1
+    assert conv_res.errors[0].page_no == 1
+    assert conv_res.errors[0].error_message.startswith(
+        "Invalid dots response: truncated dots JSON: the reply ends inside its "
+        "element list although it was not reported incomplete (Unterminated string"
+    )
+
+
+def test_truncated_dots_reply_already_reported_incomplete_is_recovered(
+    pipeline: VlmPipeline, monkeypatch
+) -> None:
+    """A filtered reply keeps its complete elements and reports only that it is
+    incomplete, as before."""
+    page = _make_page(1, VlmStopReason.CONTENT_FILTERED)
+    page.predictions.vlm_response = VlmPrediction(
+        text=_TRUNCATED_DOTS, stop_reason=VlmStopReason.CONTENT_FILTERED
+    )
+    conv_res = _make_conv_res([page])
+    document = _finalize_dots_page(pipeline, monkeypatch, conv_res, page)
+
+    assert [item.text for item in document.texts] == ["314"]
+    assert pipeline._determine_status(conv_res) == ConversionStatus.PARTIAL_SUCCESS
+    assert [error.error_message for error in conv_res.errors] == [
+        "VLM output incomplete (stop_reason=content_filter)."
+    ]
+
+
+def test_blank_dots_page_is_success(pipeline: VlmPipeline, monkeypatch) -> None:
+    """An empty element list is a blank page that converted, not a failure."""
+    page = _make_page(1, VlmStopReason.END_OF_SEQUENCE)
+    page.predictions.vlm_response = VlmPrediction(
+        text='{"layout": []}', stop_reason=VlmStopReason.END_OF_SEQUENCE
+    )
+    conv_res = _make_conv_res([page])
+    document = _finalize_dots_page(pipeline, monkeypatch, conv_res, page)
+
+    assert list(document.iterate_items()) == []
+    assert conv_res.errors == []
+    assert pipeline._determine_status(conv_res) == ConversionStatus.SUCCESS

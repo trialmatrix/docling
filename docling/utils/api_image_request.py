@@ -131,6 +131,32 @@ def _provider_error(response_payload: Any) -> str | None:
     return f"HTTP {status}: {message or 'provider error during generation'}"
 
 
+def _unusable_reply(
+    message: OpenAiChatMessage, generated_text: str, stop_reason: VlmStopReason
+) -> str | None:
+    """The reason a reply that ended normally still holds no output to read.
+
+    A model that declines sets the OpenAI-style ``refusal`` field and usually leaves
+    ``content`` empty, with an ordinary ``finish_reason``; a reply can also end with
+    no text at all. Neither is a page that came back blank: a blank page under a
+    structured prompt still answers with its (empty) structure. Both are reported as
+    a failed request rather than parsed as empty output. A reply the provider stopped
+    with its content filter keeps CONTENT_FILTERED, and one cut by the token limit
+    keeps LENGTH, since both already report the page incomplete.
+    """
+    if stop_reason in (VlmStopReason.CONTENT_FILTERED, VlmStopReason.LENGTH):
+        return None
+    if message.refusal and message.refusal.strip():
+        _log.error(
+            "The model refused the request: %s",
+            _response_preview(message.refusal, limit=200),
+        )
+        return "the model refused the request"
+    if not generated_text:
+        return "the reply carried no text"
+    return None
+
+
 def _map_stop_reason(finish_reason: str | None) -> VlmStopReason:
     if finish_reason == "content_filter":
         _log.warning("API response was filtered due to content safety policy.")
@@ -296,18 +322,26 @@ def api_image_request(
                 return _failed_request(provider_error)
 
             api_resp = OpenAiApiResponse.model_validate(response_payload)
-            generated_text = _extract_generated_text(api_resp.choices[0].message)
+            choice = api_resp.choices[0]
+            generated_text = _extract_generated_text(choice.message)
             num_tokens = _extract_total_tokens(usage)
             if num_tokens is None and api_resp.usage is not None:
                 num_tokens = api_resp.usage.total_tokens
-            stop_reason = _map_stop_reason(api_resp.choices[0].finish_reason)
+            stop_reason = _map_stop_reason(choice.finish_reason)
+
+            unusable = _unusable_reply(choice.message, generated_text, stop_reason)
+            if unusable is not None:
+                return _failed_request(
+                    f"HTTP {r.status_code}: {unusable} "
+                    f"(finish_reason={choice.finish_reason})"
+                )
 
             return ApiImageRequestResult(
                 text=generated_text,
                 num_tokens=num_tokens,
                 stop_reason=stop_reason,
                 usage=usage,
-                logprobs=api_resp.choices[0].logprobs,
+                logprobs=choice.logprobs,
             )
         except Exception as e:
             _log.error(f"Error, could not process request: {e}")

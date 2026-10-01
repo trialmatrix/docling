@@ -657,6 +657,15 @@ class VlmPipeline(PaginatedPipeline):
                 scale=1.0,
                 max_size=None,
             )
+        # Recovering a truncated reply drops the elements after the cut. That is
+        # acceptable only when _determine_status already reports the page
+        # incomplete; a reply that claims to have ended normally but does not
+        # close its JSON is reported as invalid instead of kept as a short page.
+        response = page.predictions.vlm_response
+        reported_incomplete = response is not None and response.stop_reason in (
+            VlmStopReason.LENGTH,
+            VlmStopReason.CONTENT_FILTERED,
+        )
         try:
             return parse_dots_json(
                 content=predicted_text,
@@ -665,6 +674,7 @@ class VlmPipeline(PaginatedPipeline):
                 filename=conv_res.input.file.name or "file",
                 page_image=page_image,
                 model_image_size=model_image_size,
+                recover_truncated=reported_incomplete,
             )
         except ValueError as exc:
             conv_res.errors.append(

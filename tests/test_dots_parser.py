@@ -251,6 +251,15 @@ class TestLoadDotsElements:
         raw = '{"layout": [{"a":1}, {"b":[2, 3]}, {"c":'
         assert _load_dots_elements(raw) == [{"a": 1}, {"b": [2, 3]}]
 
+    def test_truncated_without_recovery_raises(self):
+        raw = '{"layout": [{"a":1}, {"b":[2, 3]}, {"c":'
+        with pytest.raises(ValueError, match="truncated dots JSON"):
+            _load_dots_elements(raw, recover_truncated=False)
+
+    def test_complete_reply_parses_without_recovery(self):
+        raw = '```json\n{"layout": [{"a":1}]}\n```'
+        assert _load_dots_elements(raw, recover_truncated=False) == [{"a": 1}]
+
     def test_no_bracket(self):
         with pytest.raises(ValueError):
             _load_dots_elements("no json here")
