@@ -228,10 +228,13 @@ class TestApiImageRequest:
         return mock_resp
 
     @patch("docling.utils.api_image_request._make_retry_session")
-    def test_refusal_returns_inference_error(self, mock_session_factory, sample_image):
+    def test_refusal_returns_inference_error(
+        self, mock_session_factory, sample_image, caplog
+    ):
         """A model that declines with an OpenAI-style ``refusal`` and no content
         under an ordinary stop has read nothing: the page fails rather than
-        converting as blank, and the refusal text stays out of the error."""
+        converting as blank, and the refusal text stays out of the error and
+        the log, since it can quote the page."""
         mock_session_factory.return_value.__enter__.return_value.post.return_value = (
             self._reply(
                 {
@@ -253,6 +256,8 @@ class TestApiImageRequest:
         assert response.error == (
             "HTTP 200: the model refused the request (finish_reason=stop)"
         )
+        assert "can't help" not in caplog.text
+        assert "refusal of 34 characters" in caplog.text
 
     @patch("docling.utils.api_image_request._make_retry_session")
     def test_filtered_refusal_keeps_content_filtered(

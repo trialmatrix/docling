@@ -147,9 +147,11 @@ def _unusable_reply(
     if stop_reason in (VlmStopReason.CONTENT_FILTERED, VlmStopReason.LENGTH):
         return None
     if message.refusal and message.refusal.strip():
+        # The refusal is model-written text and can quote the page it declined, so
+        # only its length is logged.
         _log.error(
-            "The model refused the request: %s",
-            _response_preview(message.refusal, limit=200),
+            "The model refused the request (refusal of %d characters)",
+            len(message.refusal),
         )
         return "the model refused the request"
     if not generated_text:
