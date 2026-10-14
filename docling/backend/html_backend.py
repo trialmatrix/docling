@@ -1818,7 +1818,7 @@ class HTMLDocumentBackend(DeclarativeDocumentBackend):
             and ImageResourceLoader.is_local_path(self.base_path)
             and not loc.startswith("//")
             and (
-                loc.startswith("file://")
+                loc.startswith(("/", "file://"))
                 or ImageResourceLoader.is_absolute_path(loc)
                 or ".." in Path(loc).parts
             )

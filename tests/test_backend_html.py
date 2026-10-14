@@ -90,6 +90,8 @@ def test_local_html_keeps_nonlocal_hyperlinks_without_fetching(tmp_path, monkeyp
         raise AssertionError("A hyperlink must not fetch an image resource")
 
     monkeypatch.setattr(ImageResourceLoader, "create_image_ref", refuse_image_read)
+    # Windows does not consider a root-relative /case path fully absolute.
+    monkeypatch.setattr(ImageResourceLoader, "is_absolute_path", lambda _loc: False)
     converter = _create_html_converter(
         HTMLBackendOptions(
             enable_local_fetch=False, enable_remote_fetch=False, fetch_images=False
