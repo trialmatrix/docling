@@ -72,6 +72,46 @@ def test_html_backend_options():
         HTMLBackendOptions(source_uri=12345)
 
 
+def test_local_html_keeps_nonlocal_hyperlinks_without_fetching(tmp_path, monkeypatch):
+    from docling.backend.utils.image_resource_loader import ImageResourceLoader
+
+    source = tmp_path / "page.html"
+    source.write_text(
+        '<html><body><p><a href="/case">Root reference</a></p>'
+        '<p><a href="../case">Parent reference</a></p>'
+        '<p><a href="sibling.html">Sibling reference</a></p>'
+        '<p><a href="//example.invalid/case">Remote reference</a></p>'
+        '<p><a href="#section">Section reference</a></p>'
+        '<img src="../../private.png"></body></html>',
+        encoding="utf-8",
+    )
+
+    def refuse_image_read(*args, **kwargs):
+        raise AssertionError("A hyperlink must not fetch an image resource")
+
+    monkeypatch.setattr(ImageResourceLoader, "create_image_ref", refuse_image_read)
+    # Windows does not consider a root-relative /case path fully absolute.
+    monkeypatch.setattr(ImageResourceLoader, "is_absolute_path", lambda _loc: False)
+    converter = _create_html_converter(
+        HTMLBackendOptions(
+            enable_local_fetch=False, enable_remote_fetch=False, fetch_images=False
+        )
+    )
+    result = converter.convert(source)
+    hyperlinks = {
+        item.text: str(item.hyperlink)
+        for item in result.document.texts
+        if item.hyperlink is not None
+    }
+    assert hyperlinks == {
+        "Root reference": "/case",
+        "Parent reference": "../case",
+        "Sibling reference": str(tmp_path / "sibling.html"),
+        "Remote reference": "https://example.invalid/case",
+        "Section reference": "#section",
+    }
+
+
 def test_resolve_relative_path():
     html_path = Path("./tests/data/html/sources/example_01.html")
     in_doc = InputDocument(

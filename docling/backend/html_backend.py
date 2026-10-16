@@ -1809,6 +1809,26 @@ class HTMLDocumentBackend(DeclarativeDocumentBackend):
                 return archive_location
         return self._image_loader.resolve_relative_path(loc, self.base_path)
 
+    def _resolve_hyperlink(self, loc: str) -> str:
+        """Keep nonlocal hyperlink targets as references, without reading them."""
+        loc = loc.strip()
+        if (
+            self._mhtml_resources is None
+            and self.base_path
+            and ImageResourceLoader.is_local_path(self.base_path)
+            and not loc.startswith("//")
+            and (
+                loc.startswith(("/", "file://"))
+                or ImageResourceLoader.is_absolute_path(loc)
+                or ".." in Path(loc).parts
+            )
+        ):
+            # A local copy of a web page may contain root-relative or parent
+            # links. They are metadata, not permission to fetch a file outside
+            # the source directory. Image reads keep the confined resolver.
+            return loc
+        return self._resolve_relative_path(loc)
+
     @staticmethod
     def group_cell_elements(
         group_name: str,
@@ -2406,7 +2426,7 @@ class HTMLDocumentBackend(DeclarativeDocumentBackend):
         else:
             if isinstance(this_href, str) and this_href:
                 old_hyperlink = self.hyperlink
-                this_href = self._resolve_relative_path(this_href)
+                this_href = self._resolve_hyperlink(this_href)
                 # ugly fix for relative links since pydantic does not support them.
                 try:
                     new_hyperlink = AnyUrl(this_href)
