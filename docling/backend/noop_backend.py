@@ -22,7 +22,7 @@ class NoOpBackend(AbstractDocumentBackend):
     def __init__(self, in_doc: "InputDocument", path_or_stream: Union[BytesIO, Path]):
         super().__init__(in_doc, path_or_stream)
 
-        _log.debug(f"NoOpBackend initialized for: {path_or_stream}")
+        _log.debug("NoOpBackend initialized.")
 
         # Validate input
         try:
@@ -39,7 +39,7 @@ class NoOpBackend(AbstractDocumentBackend):
             else:
                 self.valid = False
         except Exception as e:
-            _log.error(f"NoOpBackend validation failed: {e}")
+            _log.error("NoOpBackend validation failed (%s).", type(e).__name__)
             self.valid = False
 
     def is_valid(self) -> bool:

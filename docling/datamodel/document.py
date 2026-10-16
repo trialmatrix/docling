@@ -233,9 +233,7 @@ class InputDocument(BaseModel):
                 category=FailureCategory.SOURCE_UNAVAILABLE,
                 original_error=e,
             )
-            _log.exception(
-                f"File {self.file.name} not found or cannot be opened.", exc_info=e
-            )
+            _log.error("File not found or cannot be opened (%s).", type(e).__name__)
         except RuntimeError as e:
             # Local RuntimeErrors (e.g. the "Unexpected type" guard) that aren't a
             # backend bad-input signal; categorized UNKNOWN. (Backend parse
@@ -249,10 +247,9 @@ class InputDocument(BaseModel):
                 category=FailureCategory.UNKNOWN,
                 original_error=e,
             )
-            _log.exception(
-                "An unexpected error occurred while opening the document "
-                f"{self.file.name}",
-                exc_info=e,
+            _log.error(
+                "An unexpected error occurred while opening the document (%s).",
+                type(e).__name__,
             )
 
     @classmethod

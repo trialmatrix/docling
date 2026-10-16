@@ -35,9 +35,9 @@ def decode_latex_content(path_or_stream: Union[BytesIO, Path]) -> str:
             except UnicodeDecodeError:
                 continue
             except FileNotFoundError:
-                _log.error(f"LaTeX file not found: {path_or_stream}")
+                _log.error("LaTeX file not found.")
                 break
             except OSError as e:
-                _log.error(f"Error reading LaTeX file: {e}")
+                _log.error("Error reading LaTeX file (%s).", type(e).__name__)
                 break
     return latex_text

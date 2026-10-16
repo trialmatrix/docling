@@ -231,15 +231,14 @@ def read_chart_shares(archive: zipfile.ZipFile, max_file_bytes: int) -> dict[str
             continue
         if info.file_size > max_file_bytes:
             _log.warning(
-                "Skipping chart data '%s': %d bytes exceeds max_file_bytes.",
-                info.filename,
+                "Skipping chart data: %d bytes exceeds max_file_bytes.",
                 info.file_size,
             )
             continue
         try:
             share = plistlib.loads(archive.read(info))
         except Exception:
-            _log.debug("Could not read chart data '%s'.", info.filename)
+            _log.debug("Could not read chart data.")
             continue
         if isinstance(share, dict):
             shares[info.filename[: -len(CHART_SHARE_SUFFIX)]] = share

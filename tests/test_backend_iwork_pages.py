@@ -1055,7 +1055,7 @@ def test_legacy_page_furniture_is_recovered_as_furniture():
     assert "Footnote: What does APXL stand for?!?!?" in footnotes
     # The third footnote links to a URL partway through, so its runs differ and
     # it becomes an inline group rather than a single item.
-    assert "www.oasis-open.org" in footnotes
+    assert any(text == "www.oasis-open.org" for text in footnotes)
 
     # Pages writes a first-page, an even-page and an odd-page variant of every
     # header and footer, so the same text must not be emitted three times.
@@ -1137,7 +1137,7 @@ def test_legacy_hyperlink_survives_as_a_run_of_its_own():
     linked = [item for item in doc.texts if item.hyperlink is not None]
     assert len(linked) == 1
     assert linked[0].text == "www.oasis-open.org"
-    assert str(linked[0].hyperlink).startswith("http://www.oasis-open.org")
+    assert str(linked[0].hyperlink) == "http://www.oasis-open.org/"
 
 
 def test_modern_hyperlink_is_read_from_the_smart_field_table(tmp_path: Path):
