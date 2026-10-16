@@ -130,6 +130,7 @@ class InputFormat(str, Enum):
     BOXNOTE = "boxnote"
     IWORK_PAGES = "iwork_pages"
     IWORK_KEYNOTE = "iwork_keynote"
+    IWORK_NUMBERS = "iwork_numbers"
     EBCDIC = "ebcdic"
     AFP = "afp"
 
@@ -183,6 +184,7 @@ FormatToExtensions: dict[InputFormat, list[str]] = {
     InputFormat.BOXNOTE: ["boxnote"],
     InputFormat.IWORK_PAGES: ["pages"],
     InputFormat.IWORK_KEYNOTE: ["key"],
+    InputFormat.IWORK_NUMBERS: ["numbers"],
     InputFormat.EBCDIC: ["ebc", "ebcdic"],
     InputFormat.AFP: ["afp"],
 }
@@ -280,6 +282,10 @@ FormatToMimeType: dict[InputFormat, list[str]] = {
     InputFormat.IWORK_KEYNOTE: [
         "application/vnd.apple.keynote",
         "application/x-iwork-keynote-sffkey",
+    ],
+    InputFormat.IWORK_NUMBERS: [
+        "application/vnd.apple.numbers",
+        "application/x-iwork-numbers-sffnumbers",
     ],
     InputFormat.EBCDIC: ["application/x-ebcdic"],
     InputFormat.AFP: ["application/vnd.ibm.modcap", "application/x-afp"],
@@ -419,6 +425,8 @@ class ApiImageStreamingRequestResult:
     num_tokens: int | None
     usage: Any | None = None
     logprobs: Any | None = None
+    error: str | None = None  # set when the request failed and produced no output
+    stop_reason: VlmStopReason = VlmStopReason.UNSPECIFIED
 
 
 class ContainerElement(
@@ -508,6 +516,11 @@ class Page(BaseModel):
     _backend: Optional["PdfPageBackend"] = (
         None  # Internal PDF backend. By default it is cleared during assembling.
     )
+    # Visible vector geometry captured while the page backend is alive. These
+    # are transient pipeline signals and deliberately stay out of serialized
+    # conversion results.
+    _shape_lines: list[BoundingBox] | None = PrivateAttr(default=None)
+    _shape_bounding_boxes: list[BoundingBox] | None = PrivateAttr(default=None)
     _default_image_scale: float = 1.0  # Default image scale for external usage.
     _image_cache: dict[
         float, Image
@@ -729,6 +742,8 @@ class ConfidenceReport(PageConfidenceScores):
             value.pop("low_score", None)
             value.pop("mean_grade", None)
             value.pop("low_grade", None)
+            if value.get("pages") is None:
+                value.pop("pages", None)
 
         model = handler(value)
         if not model.pages:
