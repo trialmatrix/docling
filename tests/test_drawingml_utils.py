@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: The Docling Contributors
 # SPDX-License-Identifier: MIT
 
+import os
 import subprocess
 from io import BytesIO
 from pathlib import Path
@@ -239,6 +240,11 @@ def test_convert_to_modern_format_uses_isolated_profile(monkeypatch):
         # the "conversion" runs, separate from the outer working tmp_dir.
         assert created_profile_dirs[-1].exists()
         outdir = Path(args[args.index("--outdir") + 1])
+        input_path = Path(args[-1])
+        assert input_path.read_bytes() == b"legacy doc bytes"
+        if os.name == "posix":
+            assert input_path.stat().st_mode & 0o777 == 0o600
+            assert outdir.stat().st_mode & 0o777 == 0o700
         (outdir / "input.docx").write_bytes(b"PK\x03\x04")
 
     instances = _install_fake_popen(monkeypatch, side_effect=side_effect)

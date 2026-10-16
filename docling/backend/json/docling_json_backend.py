@@ -117,12 +117,11 @@ class DoclingJSONBackend(DeclarativeDocumentBackend):
         dropped = _clear_local_image_refs(doc)
         if dropped:
             _log.warning(
-                "%s: ignored %d image reference(s) pointing at local files. "
+                "ignored %d image reference(s) pointing at local files. "
                 "To load them from a trusted JSON input, pass "
                 "DoclingJSONFormatOption(backend_options="
                 "DeclarativeBackendOptions(enable_local_fetch=True)) for "
                 "InputFormat.JSON_DOCLING in DocumentConverter(format_options=...).",
-                self.file.name,
                 dropped,
             )
 

@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from docling_core.types.doc import DocItemLabel, DoclingDocument, Size
+from docling_core.types.doc import DocItem, DocItemLabel, DoclingDocument, Size
 from PIL import Image as PILImage
 from pydantic import AnyUrl
 
@@ -61,8 +61,12 @@ def test_dots_simple_parsing():
     assert len(doc.pictures) > 0, "Should have picture elements"
 
     for item in doc.texts:
-        assert len(item.prov) > 0, f"Text item should have provenance: {item.text[:30]}"
-        bbox = item.prov[0].bbox
+        owner = item
+        while not isinstance(owner, DocItem) or not owner.prov:
+            assert owner.parent is not None
+            owner = owner.parent.resolve(doc)
+        assert owner.prov, f"Text block should have provenance: {item.text[:30]}"
+        bbox = owner.prov[0].bbox
         assert bbox is not None, f"Should have bbox: {item.text[:30]}"
         assert bbox.l >= 0 and bbox.t >= 0, "Bbox coords should be non-negative"
 
@@ -88,8 +92,8 @@ def test_dots_list_parsing():
     assert "tests/data/pdf/multi_page.pdf, page 1" in source
     assert "list_item" in labels, "Should have list items"
     assert len(list_items) == 2
-    assert "IBM MT/ST" in list_items[0].text
-    assert "Microsoft Word" in list_items[1].text
+    for item, expected in zip(list_items, ["IBM MT/ST", "Microsoft Word"]):
+        assert any(expected in child.text for child, _ in doc.iterate_items(root=item))
 
 
 def test_dots_model_image_size_rescaling():

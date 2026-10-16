@@ -301,7 +301,12 @@ def convert_to_modern_format(
         if isinstance(source, BytesIO):
             source.seek(0)
             input_path = tmp_dir / f"input.{source_suffix}"
-            input_path.write_bytes(source.read())
+            # LibreOffice needs plaintext input. Keep it owner-only and create-only
+            # inside the private working directory, which is removed in finally.
+            with os.fdopen(
+                os.open(input_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb"
+            ) as input_file:
+                input_file.write(source.read())
         else:
             input_path = source
 
