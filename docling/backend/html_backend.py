@@ -1928,26 +1928,6 @@ class HTMLDocumentBackend(DeclarativeDocumentBackend):
                 return archive_location
         return self._image_loader.resolve_relative_path(loc, self.base_path)
 
-    def _resolve_hyperlink(self, loc: str) -> str:
-        """Keep nonlocal hyperlink targets as references, without reading them."""
-        loc = loc.strip()
-        if (
-            self._mhtml_resources is None
-            and self.base_path
-            and ImageResourceLoader.is_local_path(self.base_path)
-            and not loc.startswith("//")
-            and (
-                loc.startswith(("/", "file://"))
-                or ImageResourceLoader.is_absolute_path(loc)
-                or ".." in Path(loc).parts
-            )
-        ):
-            # A local copy of a web page may contain root-relative or parent
-            # links. They are metadata, not permission to fetch a file outside
-            # the source directory. Image reads keep the confined resolver.
-            return loc
-        return self._resolve_relative_path(loc)
-
     @staticmethod
     def group_cell_elements(
         group_name: str,
@@ -2574,10 +2554,11 @@ class HTMLDocumentBackend(DeclarativeDocumentBackend):
             if isinstance(this_href, str) and this_href:
                 old_hyperlink = self.hyperlink
                 try:
-                    this_href = self._resolve_hyperlink(this_href)
+                    this_href = self._resolve_relative_path(this_href)
                 except ValueError:
-                    # Hyperlinks are references, never resource fetches. Preserve
-                    # targets the confined image resolver cannot resolve.
+                    # A link is not fetched: a target outside the base
+                    # directory (e.g. "/about" or "../index.html") is kept
+                    # as written instead of failing the conversion.
                     pass
                 # ugly fix for relative links since pydantic does not support them.
                 try:

@@ -232,7 +232,7 @@ class _NativeWhisperModel:
                 from huggingface_hub import hf_hub_download
                 from huggingface_hub.utils import LocalEntryNotFoundError
 
-                repo_id, filename = distil_checkpoint
+                repo_id, filename, revision = distil_checkpoint
                 _log.info(
                     f"loading {self.model_name} from OpenAI-format checkpoint "
                     f"{repo_id}/{filename}"
@@ -244,6 +244,7 @@ class _NativeWhisperModel:
                         checkpoint_path = hf_hub_download(
                             repo_id=repo_id,
                             filename=filename,
+                            revision=revision,
                             cache_dir=str(artifacts_path),
                             local_files_only=True,
                         )
@@ -258,7 +259,7 @@ class _NativeWhisperModel:
                         ) from err
                 else:
                     checkpoint_path = hf_hub_download(
-                        repo_id=repo_id, filename=filename
+                        repo_id=repo_id, filename=filename, revision=revision
                     )
                 self.model = whisper.load_model(
                     name=checkpoint_path, device=self.device
@@ -835,8 +836,9 @@ def _merge_into_sentences(
     """Merge Whisper segments into complete sentences.
 
     Consecutive segments are merged until a sentence-ending punctuation
-    mark (. ? !) is found. The merged item spans the full time range
-    of all contributing segments and concatenates their text.
+    mark (. ? ! or its full-width CJK form) is found. The merged item spans
+    the full time range of all contributing segments and concatenates their
+    text.
 
     This produces one block per sentence, which maps cleanly to one
     speaker per block for diarization.
@@ -869,7 +871,7 @@ def _merge_into_sentences(
                 current.words = (current.words or []) + list(item.words)
 
         # Flush on sentence boundary
-        if current.text.rstrip().endswith((".", "?", "!")):
+        if current.text.rstrip().endswith((".", "?", "!", "。", "？", "！")):  # noqa: RUF001
             merged.append(current)
             current = None
 
