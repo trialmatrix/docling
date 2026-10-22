@@ -598,7 +598,7 @@ This is \\myterm and the value is \\myvalue.
 
 
 def test_latex_href_macro():
-    """Test \\href{url}{display} emits a markdown-style link."""
+    """Test \\href{url}{display} preserves the URL and display text once each."""
     latex_content = rb"""
     \documentclass{article}
     \begin{document}
@@ -615,8 +615,8 @@ def test_latex_href_macro():
     doc = backend.convert()
 
     md = doc.export_to_markdown()
-    assert "Example Site" in md
-    assert "https://example.com" in md
+    assert md.count("Example Site") == 1
+    assert md.count("https://example.com") == 1
 
 
 def test_latex_textcolor_macro():
