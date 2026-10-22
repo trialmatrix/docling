@@ -256,7 +256,7 @@ def test_failed_page_is_not_parsed_as_empty_output(
 
 def _finalize_dots_page(
     pipeline: VlmPipeline, monkeypatch, conv_res: ConversionResult, page: Page
-) -> None:
+) -> DoclingDocument:
     pipeline.pipeline_options = VlmPipelineOptions(
         vlm_options=ApiVlmOptions(
             prompt=DOTS_LAYOUT_PROMPT, response_format=ResponseFormat.DOTS_JSON
