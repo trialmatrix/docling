@@ -9,7 +9,7 @@
 # - Detects document structure elements (text blocks, tables, figures, etc.)
 #
 # Requirements
-# - Python 3.10+
+# - Python 3.11+
 # - Install Docling: `pip install docling[onnxruntime]`
 #
 # How to run (from repo root)

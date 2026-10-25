@@ -29,7 +29,7 @@ Follow input through the affected code to the user-visible result.
   Text presence or item counts alone do not prove correct structure.
 - For a bug fix, run a small case on base and head when practical. The regression
   test must fail for the original defect and pass with the fix. State any limit.
-- Check public types, Python 3.10 support, defaults, error paths, and optional
+- Check public types, Python 3.11 support, defaults, error paths, and optional
   dependencies where affected. Prefer explicit contracts to attribute probing.
 - Inspect test assertions and changed reference data. Confirm that they detect
   the defect rather than accept the new output without a reason.

@@ -13,7 +13,7 @@ description: >
   docling-serve), and the docling-slim install extras for a minimal dependency
   footprint.
 license: MIT
-compatibility: Requires Python 3.10+
+compatibility: Requires Python 3.11+
 metadata:
   author: docling-project
   version: "1.0"

@@ -70,7 +70,7 @@ Docling simplifies document processing by parsing diverse formats — including 
 pip install docling
 ```
 
-> **Note:** Python 3.9 support was dropped in docling version 2.70.0. Please use Python 3.10 or higher.
+> **Note:** This fork requires Python 3.11 or a newer Python 3 release.
 
 Works on macOS, Linux and Windows environments for both x86_64 and arm64 architectures.
 
