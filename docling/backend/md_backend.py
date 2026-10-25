@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import html
 import logging
 import re
 import warnings
@@ -107,10 +106,6 @@ _INSTALL_HINT = (
     "The 'marko' package is required to process Markdown files. "
     "Install it with `pip install 'docling-slim[format-markdown]'`."
 )
-
-_MARKER_BODY = "DOCLING_DOC_MD_HTML_EXPORT"
-_START_MARKER = f"#_#_{_MARKER_BODY}_START_#_#"
-_STOP_MARKER = f"#_#_{_MARKER_BODY}_STOP_#_#"
 
 
 class _PendingCreationType(str, Enum):
@@ -268,7 +263,7 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
 
         self._pending_hard_line_break = False
         self._pending_soft_line_break = False
-        self._html_blocks: int = 0
+        self._html_by_ref: dict[str, str] = {}
         self._image_loader: ImageResourceLoader | None = None
 
         # A leading BOM is dropped. Kept, it prefixes the first line, so a
@@ -998,21 +993,19 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
                 self._pending_hard_line_break = True
 
         elif isinstance(element, marko.block.HTMLBlock):
-            self._html_blocks += 1
             _log.debug("HTML Block: %s", element)
             if (
                 len(element.body) > 0
             ):  # If Marko doesn't return any content for HTML block, skip it
                 html_block = element.body.strip()
 
-                # wrap in markers to enable post-processing in convert()
-                text_to_add = f"{_START_MARKER}{html_block}{_STOP_MARKER}"
-                doc.add_code(
+                html_item = doc.add_code(
                     parent=parent_item,
-                    text=text_to_add,
+                    text=html_block,
                     formatting=formatting,
                     hyperlink=hyperlink,
                 )
+                self._html_by_ref[html_item.self_ref] = html_block
 
         elif isinstance(element, _gfm_el.Table):
             _log.debug(" - GFM Table")
@@ -1147,6 +1140,7 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
 
     def convert(self) -> DoclingDocument:
         _log.debug("converting Markdown...")
+        self._html_by_ref.clear()
 
         origin = DocumentOrigin(
             filename=self.file.name or "file",
@@ -1174,27 +1168,15 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
                 list_last_item_by_ref={},
             )
 
-            if self._html_blocks > 0:
+            if self._html_by_ref:
                 html_backend_cls = MarkdownHTMLDocumentBackend
                 html_payload = serialize_markdown_for_html(
-                    doc, source_hash=self.document_hash
+                    doc,
+                    source_hash=self.document_hash,
+                    raw_html_by_ref=self._html_by_ref,
                 )
                 html_str = html_payload.text
-
-                # The serializer escapes code contents. Restore only the marked
-                # raw HTML blocks, leaving ordinary code and text escaped.
-                html_str, count = re.subn(
-                    rf"<pre>\s*<code>\s*{re.escape(_START_MARKER)}"
-                    rf"(.*?){re.escape(_STOP_MARKER)}\s*</code>\s*</pre>",
-                    lambda match: html.unescape(match.group(1)),
-                    html_str,
-                    flags=re.DOTALL,
-                )
-                if count != self._html_blocks:
-                    raise RuntimeError(
-                        "An internal error has occurred during Markdown conversion."
-                    )
-                self._html_blocks = 0
+                self._html_by_ref.clear()
                 # delegate to HTML backend
                 stream = BytesIO(bytes(html_str, encoding="utf-8"))
                 md_options = cast(MarkdownBackendOptions, self.options)

@@ -53,6 +53,23 @@ def test_mixed_html_restores_raw_blocks_without_unescaping_code(
     assert code_items[0].text == code
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        "#_#_DOCLING_DOC_MD_HTML_EXPORT_START_#_#<div>Literal &amp; code</div>",
+        "#_#_DOCLING_DOC_MD_HTML_EXPORT_START_#_#<div>Literal &amp; code</div>"
+        "#_#_DOCLING_DOC_MD_HTML_EXPORT_STOP_#_#",
+    ],
+)
+def test_literal_html_markers_in_code_do_not_restore_raw_html(code: str) -> None:
+    doc = _convert_markdown(
+        f"```html\n{code}\n```\n\n<div>Real HTML &amp; text</div>\n",
+        MarkdownBackendOptions(),
+    )
+    assert [item.text for item in doc.texts if isinstance(item, CodeItem)] == [code]
+    assert any(item.text == "Real HTML & text" for item in doc.texts)
+
+
 def test_convert_valid():
     fmt = InputFormat.MD
     cls = MarkdownDocumentBackend
