@@ -1181,20 +1181,19 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
                 )
                 html_str = html_payload.text
 
-                def _restore_original_html(txt, regex):
-                    _txt, count = re.subn(regex, "", txt)
-                    if count != self._html_blocks:
-                        raise RuntimeError(
-                            "An internal error has occurred during Markdown conversion."
-                        )
-                    return _txt
-
-                # restore original HTML by removing previously added markers
-                for regex in [
-                    rf"<pre>\s*<code>\s*{_START_MARKER}",
-                    rf"{_STOP_MARKER}\s*</code>\s*</pre>",
-                ]:
-                    html_str = _restore_original_html(txt=html_str, regex=regex)
+                # The serializer escapes code contents. Restore only the marked
+                # raw HTML blocks, leaving ordinary code and text escaped.
+                html_str, count = re.subn(
+                    rf"<pre>\s*<code>\s*{re.escape(_START_MARKER)}"
+                    rf"(.*?){re.escape(_STOP_MARKER)}\s*</code>\s*</pre>",
+                    lambda match: html.unescape(match.group(1)),
+                    html_str,
+                    flags=re.DOTALL,
+                )
+                if count != self._html_blocks:
+                    raise RuntimeError(
+                        "An internal error has occurred during Markdown conversion."
+                    )
                 self._html_blocks = 0
                 # delegate to HTML backend
                 stream = BytesIO(bytes(html_str, encoding="utf-8"))

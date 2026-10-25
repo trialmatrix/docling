@@ -32,6 +32,27 @@ from .verify_utils import verify_docitems, verify_document
 pytestmark = pytest.mark.cross_platform
 
 
+@pytest.mark.parametrize(
+    "code", ["<div>Literal & code</div>", "<div>Literal &amp; code</div>", "& < >"]
+)
+@pytest.mark.parametrize("fenced", [False, True])
+def test_mixed_html_restores_raw_blocks_without_unescaping_code(
+    code: str, fenced: bool
+) -> None:
+    markdown_code = f"```html\n{code}\n```" if fenced else f"`{code}`"
+    doc = _convert_markdown(
+        "<div>HTML &amp; text</div>\n\n"
+        f"{markdown_code}\n\n<div>Second HTML block</div>\n",
+        MarkdownBackendOptions(),
+    )
+
+    assert any(item.text == "HTML & text" for item in doc.texts)
+    assert any(item.text == "Second HTML block" for item in doc.texts)
+    code_items = [item for item in doc.texts if isinstance(item, CodeItem)]
+    assert len(code_items) == 1
+    assert code_items[0].text == code
+
+
 def test_convert_valid():
     fmt = InputFormat.MD
     cls = MarkdownDocumentBackend
