@@ -368,7 +368,7 @@ docs = [
   # pymdown-extensions was previously a transitive dep of mkdocs-material;
   # mkdocs.yml's markdown_extensions list still relies on pymdownx.* and on
   # pymdownx.slugs.slugify, so pin it directly now that material is removed.
-  "pymdown-extensions~=10.0",
+  "pymdown-extensions>=11.0.1,<12.0.0",
   # Used by scripts/render_notebooks.py to convert example notebooks and
   # jupytext percent-format .py scripts to markdown at docs build time. Zensical
   # has no mkdocs-jupyter equivalent on its roadmap, so the example pages are
@@ -378,7 +378,7 @@ docs = [
 ]
 
 examples = [
-  "datasets~=2.21",
+  "datasets>=5.0.1,<6.0.0",
   "python-dotenv~=1.0",
   "langchain-huggingface>=0.0.3",
   "langchain-milvus~=0.1",
