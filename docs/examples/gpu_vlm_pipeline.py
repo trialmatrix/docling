@@ -5,7 +5,7 @@
 # - Demonstrates using presets with API runtime (vLLM) for high-throughput GPU processing
 #
 # Requirements
-# - Python 3.10+
+# - Python 3.11+
 # - Install Docling: `pip install docling`
 # - Install vLLM: `pip install vllm`
 #

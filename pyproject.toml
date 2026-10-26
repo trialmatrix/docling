@@ -27,7 +27,6 @@ classifiers = [
   "Intended Audience :: Science/Research",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -43,12 +42,12 @@ authors = [
   { name = "Panos Vagenas", email = "pva@zurich.ibm.com" },
   { name = "Peter Staar", email = "taa@zurich.ibm.com" },
 ]
-requires-python = '>=3.10,<4.0'
+requires-python = '>=3.11,<4.0'
 
 # MINIMAL BASE (8 packages) - ~50MB
 dependencies = [
   'pydantic>=2.0.0,<3.0.0',
-  'docling-core>=2.103.1,<3.0.0',
+  'docling-core>=2.104.0,<3.0.0',
   'pydantic-settings>=2.3.0,<3.0.0',
   'filetype>=1.2.0,<2.0.0',
   'requests>=2.32.2,<3.0.0',
@@ -78,7 +77,7 @@ docling-tools = "docling.cli.tools:app"
 # ============================================================================
 convert-core = [
   'numpy>=1.24.0,<3.0.0',
-  'pillow>=10.0.0,<14.0.0',
+  'pillow>=13.0.0,<14.0.0',
   'rtree>=1.3.0,<2.0.0',
   'scipy>=1.9.0,<2.0.0',
 ]
@@ -170,7 +169,7 @@ format-xml-uspto = [
 ]
 
 format-xml-xbrl = [
-  'arelle-release>=2.38.17,<3.0.0',
+  'arelle-release>=2.47.0,<3.0.0',
 ]
 
 format-html-render = [
@@ -282,7 +281,7 @@ models-vlm-inline = [
 feat-chunking = [
   # >=2.94.1 relaxed its transformers pin; older releases cap transformers<5.9.0
   # on macOS, which conflicts with the mlx-vlm floor in models-vlm-inline.
-  'docling-core[chunking]>=2.103.1,<3.0.0',
+  'docling-core[chunking]>=2.104.0,<3.0.0',
 ]
 
 service-client = [
@@ -334,7 +333,7 @@ typecheck = [
 ]
 pr-fast-checks = [
   { include-group = "typecheck" },
-  "docling-core[chunking] (>=2.103.1,<3.0.0)",
+  "docling-core[chunking] (>=2.104.0,<3.0.0)",
   "pydantic (>=2.0.0,<3.0.0)",
   "pydantic-settings (>=2.3.0,<3.0.0)",
   "ruff==0.15.12",
@@ -369,7 +368,7 @@ docs = [
   # pymdown-extensions was previously a transitive dep of mkdocs-material;
   # mkdocs.yml's markdown_extensions list still relies on pymdownx.* and on
   # pymdownx.slugs.slugify, so pin it directly now that material is removed.
-  "pymdown-extensions~=10.0",
+  "pymdown-extensions>=11.0.1,<12.0.0",
   # Used by scripts/render_notebooks.py to convert example notebooks and
   # jupytext percent-format .py scripts to markdown at docs build time. Zensical
   # has no mkdocs-jupyter equivalent on its roadmap, so the example pages are
@@ -379,7 +378,7 @@ docs = [
 ]
 
 examples = [
-  "datasets~=2.21",
+  "datasets>=5.0.1,<6.0.0",
   "python-dotenv~=1.0",
   "langchain-huggingface>=0.0.3",
   "langchain-milvus~=0.1",
@@ -429,6 +428,7 @@ markers = [
 ]
 
 [tool.ruff]
+# Preserve the existing syntax lint baseline during the runtime/dependency update.
 target-version = "py310"
 line-length = 88
 respect-gitignore = true
@@ -487,7 +487,7 @@ combine-as-imports = true
 all = "warn"
 
 [tool.ty.environment]
-python-version = "3.10"
+python-version = "3.11"
 
 [tool.ty.src]
 include = ["docling", ".github/scripts"]

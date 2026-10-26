@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: The Docling Contributors
 # SPDX-License-Identifier: MIT
 
-"""Keep Markdown pictures through the internal HTML round trip."""
+"""Keep Markdown pictures and raw HTML through the internal HTML round trip."""
 
 import html
 from dataclasses import dataclass
@@ -18,8 +18,15 @@ from docling_core.transforms.serializer.html import (
     HTMLDocSerializer,
     HTMLParams,
     HTMLPictureSerializer,
+    HTMLTextSerializer,
 )
-from docling_core.types.doc import DoclingDocument, ImageRef, PictureItem
+from docling_core.types.doc import (
+    CodeItem,
+    DoclingDocument,
+    ImageRef,
+    PictureItem,
+    TextItem,
+)
 from docling_core.types.doc.common.constants import DOCUMENT_TOKENS_EXPORT_LABELS
 from docling_core.types.doc.common.content_layer import DEFAULT_CONTENT_LAYERS
 from typing_extensions import override
@@ -33,6 +40,29 @@ from docling.datamodel.document import InputDocument
 class MarkdownHTMLPayload:
     text: str
     picture_refs: dict[str, ImageRef | None]
+
+
+class _MarkdownTextSerializer(HTMLTextSerializer):
+    raw_html_by_ref: dict[str, str]
+
+    @override
+    def serialize(
+        self,
+        *,
+        item: TextItem,
+        doc_serializer: BaseDocSerializer,
+        doc: DoclingDocument,
+        **kwargs: Any,
+    ) -> SerializationResult:
+        # Only parser-registered raw HTML bypasses normal code escaping.
+        # User text, including strings that resemble markers, is not identity.
+        if isinstance(item, CodeItem) and item.self_ref in self.raw_html_by_ref:
+            return create_ser_result(
+                text=self.raw_html_by_ref[item.self_ref], span_source=item
+            )
+        return super().serialize(
+            item=item, doc_serializer=doc_serializer, doc=doc, **kwargs
+        )
 
 
 class _MarkdownPictureSerializer(HTMLPictureSerializer):
@@ -82,7 +112,7 @@ class MarkdownHTMLDocumentBackend(HTMLDocumentBackend):
 
 
 def serialize_markdown_for_html(
-    doc: DoclingDocument, *, source_hash: str
+    doc: DoclingDocument, *, source_hash: str, raw_html_by_ref: dict[str, str]
 ) -> MarkdownHTMLPayload:
     # Include the source hash so original HTML cannot collide with a reference
     # merely by using the same picture index. The namespace is deterministic.
@@ -96,6 +126,7 @@ def serialize_markdown_for_html(
             labels=DOCUMENT_TOKENS_EXPORT_LABELS,
             layers=DEFAULT_CONTENT_LAYERS,
         ),
+        text_serializer=_MarkdownTextSerializer(raw_html_by_ref=raw_html_by_ref),
         picture_serializer=_MarkdownPictureSerializer(prefix),
     )
     return MarkdownHTMLPayload(serializer.serialize().text, picture_refs)
